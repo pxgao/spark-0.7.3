@@ -1,0 +1,342 @@
+package spark.streaming.examples
+
+import spark.streaming.{Time, Seconds, DStream, StreamingContext}
+import spark.RDD
+import scala.actors.Actor._
+import scala.actors.Actor
+import scala.collection.immutable
+
+/**
+ * Created with IntelliJ IDEA.
+ * User: peter
+ * Date: 10/13/13
+ * Time: 8:25 PM
+ * To change this template use File | Settings | File Templates.
+ */
+class SqlSparkStreamingContext(_ssc : StreamingContext) {
+  val ssc = _ssc
+  val inputStreams = scala.collection.mutable.Map[String, DStream[String]]()
+  val recentBatchOfInputStreams = scala.collection.mutable.Map[Time, scala.collection.mutable.Map[String, RDD[String]]]()
+  val operatorGraph = new OperatorGraph(this)
+  val tables = scala.collection.mutable.Map[String, Table]()
+  val parser = new SqlParser()
+
+
+  object columns {
+    private var globalColumnCount = 0
+    def getGlobalColId = {globalColumnCount += 1; globalColumnCount - 1}
+  }
+
+  def socketTextStream(ip : String, port : Int, name: String) {
+    inputStreams += name -> ssc.socketTextStream(ip, port)
+  }
+
+
+  def start(){
+
+    inputStreams.foreach(kvp => {
+      val name = kvp._1
+      val stream = kvp._2
+      stream.foreach((rdd,time) => {
+        if (!recentBatchOfInputStreams.contains(time))
+          recentBatchOfInputStreams += time -> scala.collection.mutable.Map[String, RDD[String]]()
+        recentBatchOfInputStreams(time) += name -> rdd
+        if(recentBatchOfInputStreams(time).keySet == inputStreams.keys){
+          processRDDActor ! (time,recentBatchOfInputStreams(time))
+        }
+      })
+    })
+    ssc.start()
+  }
+
+  def stop(){
+    ssc.stop()
+  }
+
+
+  def executeQuery(q : Any) = q match{
+    case (t:Identifier, s:SelectStatement) => {
+      executeSelectQuery(t,s)
+    }
+    case (t:Identifier, s:InputStatement) => {
+      socketTextStream(s.ip, s.port, t.name + "_input")
+      val nameTypeGID = s.column.map(tp => (tp._1,(tp._2, columns.getGlobalColId))).toMap
+      val schema = new Schema(nameTypeGID.values.toIndexedSeq)
+      val operator = new ParseOperator(schema, s.dilimiter, t.name + "_input",this)
+      tables += t.name -> new Table(nameTypeGID, operator)
+    }
+    case o:OutputStatement =>{
+      new OutputOperator(tables(o.table).getSinkOperator, tables(o.table).getTypeGIDFromName.map(tp => tp._2._2).toIndexedSeq, this)
+    }
+    case c:Comment => {}
+  }
+
+  def executeSelectQuery(t : Identifier, s: SelectStatement){
+    def getFunctionFromName(name : String, typeName : String) = {
+      typeName match{
+        case "int" => {
+          name match{
+            case "sum" => ((a:Int, b:Int) => a + b)
+            case "max" => ((a:Int, b:Int) => scala.math.max(a,b))
+            case "min" => ((a:Int, b:Int) => scala.math.min(a,b))
+
+          }
+        }
+        case "double" => {
+          name match{
+            case "sum" => ((a:Int, b:Int) => a + b)
+            case "max" => ((a:Int, b:Int) => scala.math.max(a,b))
+            case "min" => ((a:Int, b:Int) => scala.math.min(a,b))
+
+          }
+        }
+      }
+    }
+
+    val sql = s.sql
+    val fromTable = tables(sql("from").asInstanceOf[Identifier].name)
+    var tailOperator = fromTable.getSinkOperator
+
+    var getTypeGIDFromName = fromTable.getTypeGIDFromName
+    val joinedTables = scala.collection.mutable.Map[String, Table](sql("from").asInstanceOf[Identifier].name -> fromTable)
+
+    if(sql.contains("where"))
+    {
+      val condition = sql("where").asInstanceOf[Condition]
+      val whereColName = condition.GetVariableSet()
+      val whereColGID = whereColName.map(name => fromTable.getTypeGIDFromName(name)._2)
+      val getColumnGIdFromName = fromTable.getTypeGIDFromName.filter(tp => whereColName(tp._1)).map(tp => (tp._1, tp._2._2))
+      val f = (record : IndexedSeq[Any], schema : Schema) => {
+        val _condition : Condition = condition
+        val _getColumnLocalIdFromName = getColumnGIdFromName.map(tp => (tp._1, schema.getLocalIdFromGlobalId(tp._2)))
+        condition.Eval(_getColumnLocalIdFromName, record)
+      }
+      tailOperator = new WhereOperator(tailOperator, f, whereColGID, this)
+    }
+    if(sql.contains("window")){
+      tailOperator = new WindowOperator(tailOperator, sql("window").asInstanceOf[WindowProperty].windowDuration, this)
+    }
+    if(sql.contains("groupby")){
+      val keys = sql("groupby").asInstanceOf[List[Identifier]].map(i => fromTable.getTypeGIDFromName(i.name)._2).toIndexedSeq
+
+      val functions = sql("select").asInstanceOf[List[SelectItem]].filter(i => i.function != null).map(i => (fromTable.getTypeGIDFromName(i.selectCol.name)._2, getFunctionFromName(i.function.name, fromTable.getTypeGIDFromName(i.selectCol.name)._1))).toMap
+      val getNewNameFromOldGID = sql("select").asInstanceOf[List[SelectItem]].filter(i => i.function != null).map(i => (fromTable.getTypeGIDFromName(i.selectCol.name)._2, i.asName.name)).toMap
+
+      val groupByOp = new GroupByOperator(tailOperator,keys,functions,this)
+      val getGroupByNewNameFromNewGID = groupByOp.getNewGIDFromOldGID.map(tp => (tp._2 , getNewNameFromOldGID(tp._1))).toMap
+
+      tailOperator = groupByOp
+      val getNameTypeFromGID = getTypeGIDFromName.map(tp => (tp._2._2,(tp._1,tp._2._1))).toMap
+      getTypeGIDFromName =  tailOperator.outputSchema.getSchemaArray.map(tp =>
+        (
+          if(getGroupByNewNameFromNewGID.contains(tp._2)){
+            getGroupByNewNameFromNewGID(tp._2)
+          }else{
+            getNameTypeFromGID(tp._2)._1
+          },
+          (tp._1, tp._2)
+          )).toMap
+      println("getTypeGIDFromName" + getTypeGIDFromName)
+
+
+    }
+    if(sql.contains("join")){
+      val j = sql("join").asInstanceOf[JoinStatement]
+      val rightTable = tables(j.table.name)
+      if(j.joinType == "inner"){
+        val leftParent = tailOperator
+        val rightParent = rightTable.getSinkOperator
+        val joinCond = j.onCol.map(tp => {
+          if(joinedTables.contains(tp._1.table.name)
+            && tp._2.table.name == j.table.name){
+            ( if(getTypeGIDFromName.contains(tp._1.column.name))
+                getTypeGIDFromName(tp._1.column.name)._2
+              else if(getTypeGIDFromName.contains(tp._1.table.name + "." + tp._1.column.name))
+                getTypeGIDFromName(tp._1.table.name + "." + tp._1.column.name)._2
+              else
+                throw new Exception("Can't find  table name")
+              ,
+              rightTable.getTypeGIDFromName(tp._2.column.name)._2)
+          } else if(joinedTables.contains(tp._2.table.name)
+            && tp._1.table.name == j.table.name){
+            (rightTable.getTypeGIDFromName(tp._2.column.name)._2,
+              if(getTypeGIDFromName.contains(tp._1.column.name))
+                getTypeGIDFromName(tp._1.column.name)._2
+              else if(getTypeGIDFromName.contains(tp._1.table.name + "." + tp._1.column.name))
+                getTypeGIDFromName(tp._1.table.name + "." + tp._1.column.name)._2
+              else
+                throw new Exception("Can't find  table name")
+              )
+          }else{
+            throw new Exception("join condition mismatch")
+          }
+        }).toIndexedSeq
+        joinedTables += j.table.name -> tables(j.table.name)
+        tailOperator = new InnerJoinOperator(leftParent,rightParent, joinCond, this)
+
+        val getNameTypeFromGID = getTypeGIDFromName.map(tp => (tp._2._2,(tp._1,tp._2._1))).toMap
+        val rightTable_getNameTypeFromGID = rightTable.getTypeGIDFromName.map(tp => (tp._2._2,(tp._1,tp._2._1))).toMap
+        getTypeGIDFromName = tailOperator.outputSchema.getSchemaArray.map(tp => {
+          (
+          if(getNameTypeFromGID.contains(tp._2)){
+            val newName = getNameTypeFromGID(tp._2)._1
+            if(!newName.contains("."))
+              sql("from").asInstanceOf[Identifier].name + "." + newName
+            else
+              newName
+          }
+          else if(rightTable_getNameTypeFromGID.contains(tp._2)){
+            println("join " + j.table.name + "." + rightTable_getNameTypeFromGID(tp._2)._1 )
+            j.table.name + "." + rightTable_getNameTypeFromGID(tp._2)._1
+          }
+          else
+            throw new Exception("Can't find GID")
+          ,
+          (tp._1, tp._2))
+        }).toMap
+      }
+
+    }
+
+    val selectCol = sql("select").asInstanceOf[List[SelectItem]].map(si => {
+      if(si.asName != null && getTypeGIDFromName.contains(si.asName.name))
+        getTypeGIDFromName(si.asName.name)._2
+      else if(si.table != null && si.selectCol != null && getTypeGIDFromName.contains(si.table.name + "." + si.selectCol.name))
+        getTypeGIDFromName(si.table.name + "." + si.selectCol.name)._2
+      else if(getTypeGIDFromName.contains(si.selectCol.name))
+        getTypeGIDFromName(si.selectCol.name)._2
+      else
+        throw new Exception("cant find name")
+    }).toIndexedSeq
+
+    tailOperator = new SelectOperator(tailOperator,selectCol,this)
+
+    val selectColSet = selectCol.toSet
+    getTypeGIDFromName = getTypeGIDFromName.filter(tp => selectColSet(tp._2._2))
+
+    println("getTypeGIDFromName" + getTypeGIDFromName)
+
+    tables += t.name -> new Table(getTypeGIDFromName, tailOperator)
+  }
+
+
+
+
+  val processRDDActor = actor{
+    while(true){
+      receive{
+        case (time:Time, rdds :scala.collection.mutable.Map[String, RDD[String]]) =>
+        {
+          processBatch(time,rdds)
+        }
+      }
+    }
+  }
+
+  def processBatch(time:Time, rdds :scala.collection.mutable.Map[String, RDD[String]]){
+    println("running " + time)
+    val exec = new Execution(time,rdds)
+    operatorGraph.execute(SqlHelper.printRDD,exec)
+  }
+
+
+  def test(){
+    val parsedLines = parser.parseFile("sql.txt")
+    parsedLines.foreach(p => executeQuery(p) )
+
+    print(this.operatorGraph.toString())
+
+//    val f = (record : IndexedSeq[Any], schema : Schema) => {
+//      record.head.asInstanceOf[Int] > 0
+//    }
+//
+//    val f2 = (record : IndexedSeq[Any], schema : Schema) => {
+//      record.tail.head.asInstanceOf[Int] > 0
+//    }
+//
+//
+//    val s = new Schema(IndexedSeq(
+//      ("int", columns.getGlobalColId),
+//      ("int", columns.getGlobalColId),
+//      ("int", columns.getGlobalColId),
+//      ("int", columns.getGlobalColId),
+//      ("int", columns.getGlobalColId),
+//      ("int", columns.getGlobalColId)) )
+
+//    socketTextStream("localhost", 9999, "ii")
+//    val in = new ParseOperator(s, "ii", this)
+//    val wh = new WhereOperator(in,f,this)
+//    val wh2 = new WhereOperator(wh,f2,this)
+//    val ou = new OutputOperator(wh2, IndexedSeq(0,1,2,3), this)
+
+//    val x = new ParseOperator(s, "ii", this)
+//    val in = new WindowOperator(x, 5,this)
+
+
+//    val se = new SelectOperator(in,IndexedSeq(0,1), this)
+//    val wh = new WhereOperator(se,f,Set(0),this){selectivity = 0.9}
+//    val se2 = new SelectOperator(in,IndexedSeq(2,3), this)
+//
+//    val jo = new InnerJoinOperator(wh,se2,IndexedSeq((0,2)),this)
+//    val wh2 = new WhereOperator(jo, f2, Set(1), this){selectivity = 0.7}
+//    val ou = new OutputOperator(wh2, IndexedSeq(0,1,2,3), this)
+
+//    val se0 = new SelectOperator(in,IndexedSeq(0,1), this)
+//    val se1 = new SelectOperator(in,IndexedSeq(2,3), this)
+//    val se2 = new SelectOperator(in,IndexedSeq(4,5), this)
+//
+//    val ja = new InnerJoinOperator(se0,se1,IndexedSeq((0,2)),this){selectivity = 2.1}
+//    val jb = new InnerJoinOperator(ja,se2,IndexedSeq((0,4)),this){selectivity = 1.9}
+//
+//    val ou = new OutputOperator(jb, IndexedSeq(0,1,2,3,4,5), this)
+
+//    print(this.operatorGraph.toString())
+//    println("pushing")
+//    this.operatorGraph.pushAllPredicates
+//    print(this.operatorGraph.toString())
+//    println("grouging where")
+//    this.operatorGraph.groupPredicate()
+//    print(this.operatorGraph.toString())
+//    println("optimizing where")
+//    this.operatorGraph.whereOperatorSets.foreach(s => s.optimize())
+
+//    println("grouping & optimizing inner join")
+//    this.operatorGraph.groupInnerJoin()
+//    this.operatorGraph.InnerJoinOperatorSets.foreach(s => s.optimize())
+//    print(this.operatorGraph.toString())
+
+    start()
+  }
+
+}
+
+class Execution(time:Time, inputRdds :scala.collection.mutable.Map[String, RDD[String]]){
+  def getInputRdds = inputRdds
+  def getTime = time
+}
+
+
+
+class Schema (schemaArray : IndexedSeq[(String, Int)]) extends Serializable{
+  //schamaArray is an array of (className, globalID)
+  val getClassFromLocalColId = schemaArray.zipWithIndex.map(kvp => (kvp._2,kvp._1._1)).toMap
+  val getLocalIdFromGlobalId = schemaArray.zipWithIndex.map(kvp => (kvp._1._2, kvp._2)).toMap
+  val getClassFromGlobalId = schemaArray.map(tp => (tp._2,tp._1)).toMap
+  val getGlobalIdSet = schemaArray.map(_._2).toSet
+  def getSchemaArray = schemaArray
+  override def toString = schemaArray.toString()
+}
+
+class Table(nameTypeGID : Map[String,(String, Int)], sinkOperator : Operator){
+  def getTypeGIDFromName = nameTypeGID
+  def getSinkOperator = sinkOperator
+}
+
+object SqlHelper{
+  def printRDD(rdd : RDD[_]) {
+    rdd.foreach(record => record match {
+      case record:IndexedSeq[Any] => println(record.toList)
+      case record:Any => println(record)
+    })
+  }
+}

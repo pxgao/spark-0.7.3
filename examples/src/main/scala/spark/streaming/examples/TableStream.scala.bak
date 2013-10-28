@@ -1,0 +1,265 @@
+package spark.streaming.examples
+
+
+import spark.streaming.{Seconds, StreamingContext, DStream}
+import spark.streaming.StreamingContext._
+
+class TableContext (s : StreamingContext) {
+  var ts:Map[String,TableStream] = Map()
+  var ssc = s
+  def executeQuery(q : Any) = q match{
+    case (t:Identifier, s:SelectStatement) => {
+      val fromTable = s.sql("from").asInstanceOf[Identifier].name
+      val newTable = ts(fromTable).executeSQL(s,t.name)
+      ts += (t.name -> newTable)
+    }
+    case (t:Identifier, s:InputStatement) => {
+      val lines = ssc.socketTextStream(s.ip, s.port)
+      val newTable = TableStream.FromString(t.name, lines, s.column.keys.toList, this)
+      ts += (t.name -> newTable)
+    }
+    case o:OutputStatement =>{
+      ts(o.table).select(o.column.map(si => (si.selectCol.name,si)).toMap).print(o.delimiter)
+    }
+    case c:Comment => {}
+  }
+}
+
+object TableStream {
+  def FromString(tn : String, stream: DStream[String], columnName:List[String], context : TableContext) = new TableStream(tn,stream.map(_.split(",").map(v => new Entry(v.toDouble)).toArray),columnName, context)
+}
+
+class TableStream(tn : String, stream: DStream[Array[Entry]], columnName : List[String], c : TableContext) {
+	val parentContext = c
+  val tableName = tn
+  val column = columnName.toArray
+  val columnIndexedByName = columnName.zipWithIndex.toMap
+  val selectedColumn = columnIndexedByName.map(e => e._2).toList
+
+
+	val os = stream.map(record => record.zipWithIndex.map(e => (e._2,e._1)).toMap)
+
+
+
+	def select(selectItem : Map[String, SelectItem]) : TableStream = {
+    val selectCol = selectItem.map(e => e._1).toSet
+    val allCol = column
+	  val newOs = os.map(record  =>  record.filter(e => selectCol(allCol(e._1)) ))
+    val selectedColumn = this.selectedColumn.filter(e => selectCol(allCol(e)))
+
+    val stream = newOs.map(record => record.map(entry => entry._2).toArray)
+    val newCol = column.zipWithIndex.filter(e => selectedColumn.exists(_ == e._2) ).map(e=> getNewName(selectItem(e._1))).toList
+    new TableStream(tn,stream, newCol, this.parentContext)
+	}
+	
+	def where (cond : Condition) :TableStream = {
+    val newOs = os.filter(record => cond.Eval(columnIndexedByName, record))
+    val stream = newOs.map(record => record.map(entry => entry._2).toArray)
+    val newCol = column.zipWithIndex.filter(e => selectedColumn.exists(_ == e._2) ).map(e=> e._1).toList
+    new TableStream(tn,stream, newCol, this.parentContext)
+  }
+
+  def groupBy(byCol : Set[String], aggCol : Map[String,String], allSelect : Map[String, SelectItem]) : TableStream = {
+
+    val aggregation = (x : Map[Int,Entry], y : Map[Int,Entry], aggCol : Map[String,String], allCol : Array[String]) => {
+      val aggFunction = (x :Entry, y:Entry, fn:String) => {
+        x.f(y,fn)
+      }
+      x.map(v => (v._1, aggFunction(v._2, y(v._1), aggCol(allCol(v._1)))))
+    }
+
+    val allCol = column
+    val newOs =
+      if (!byCol.isEmpty){
+        val kvp = os.map(e => (e.filter(x => byCol(allCol(x._1))), e.filter(x => aggCol.contains(allCol(x._1)) ) )  )
+        val reduced = kvp.reduceByKey((x,y) => aggregation(x,y,aggCol, allCol))
+        reduced.map(x => x._1 ++ x._2)
+      }else{
+        val v = os.map(e => e.filter(x => aggCol.contains(allCol(x._1)) ) )
+        v.reduce((x,y) => aggregation(x,y,aggCol, allCol))
+      }
+    val selectedColumn = this.selectedColumn.filter(e => byCol(column(e)) || aggCol.exists(_._1 == column(e)) )
+
+    val stream = newOs.map(record => record.map(entry => entry._2).toArray)
+    val newCol = column.zipWithIndex.filter(e => selectedColumn.exists(_ == e._2) ).map(e=> getNewName(allSelect(e._1))).toList
+    new TableStream(tn,stream, newCol, this.parentContext)
+  }
+
+  def join(other : TableStream, joinCol : Map[String,String], thisSelectItem : Map[String, SelectItem], otherSelectItem : Map[String, SelectItem], joinType : String) :TableStream  = {
+    val getSelectedCol = (record : Seq[Map[Int,Entry]], selectCol : Set[String], allCol : Array[String]) => {
+      if(record.isEmpty){
+        List(allCol.zipWithIndex.filter(e => selectCol(allCol(e._2))).map(e => (e._2, new Entry(null)) ).map(e => e._2).toList)
+      }else{
+        record.map(x => x.filter(e => selectCol(allCol(e._1))).map(e => e._2).toList).toList
+      }
+    }
+    val thisSelectCol = thisSelectItem.map(si => si._2.selectCol.name).toSet
+    val otherSelectCol = otherSelectItem.map(si => si._2.selectCol.name).toSet
+    val cross = (xs: Traversable[List[Entry]], ys :Traversable[List[Entry]]) => for { x <- xs; y <- ys } yield (x ++ y).toArray
+
+    val thisColumnIndexedByName = this.columnIndexedByName
+    val otherColumnIndexedByName = other.columnIndexedByName
+    val thisAllCol = this.column
+    val otherAllCol = other.column
+    val joinColNum = joinCol.map(e => (thisColumnIndexedByName(e._1), otherColumnIndexedByName(e._2)))
+    val thisKvp = os.map(record => (record.filter(e => joinColNum.exists(i => i._1 == e._1)).map(e => (joinColNum(e._1),e._2)).toMap, record))
+    val otherKvp = other.os.map(record => (record.filter(e => joinColNum.exists(i => i._2 == e._1)).toMap, record))
+
+    val thisSc = thisColumnIndexedByName.filter(e => thisSelectCol(e._1)).map(e => getNewName(thisSelectItem(e._1))).toList
+    val otherSc = otherColumnIndexedByName.filter(e => otherSelectCol(e._1)).map(e=> getNewName(otherSelectItem(e._1))).toList
+    val selectedColumn = thisSc ++ otherSc
+
+
+    if (joinType == "inner"){
+      val joined = thisKvp.join(otherKvp).map(tuple => tuple._2)
+      val selected = joined.map(tuple => (tuple._1.filter(e => thisSelectCol(thisAllCol(e._1))).map(e => e._2) ++   tuple._2.filter(e=> otherSelectCol(otherAllCol(e._1))).map(e => e._2)).toArray        )
+      new TableStream(tn, selected, selectedColumn, this.parentContext)
+    }
+    else{
+      val grouped = thisKvp.cogroup(otherKvp).map(kvp => kvp._2)
+      //grouped.print()
+      if(joinType == "left"){
+        val joined = grouped.filter(tuple => !tuple._1.isEmpty)
+        val selected = joined.flatMap(e => cross( getSelectedCol(e._1, thisSelectCol, thisAllCol), getSelectedCol(e._2, otherSelectCol, otherAllCol)))
+        new TableStream(tn, selected, selectedColumn, this.parentContext)
+      }else if(joinType == "right"){
+        val joined = grouped.filter(tuple => !tuple._2.isEmpty)
+        val selected = joined.flatMap(e => cross( getSelectedCol(e._1, thisSelectCol, thisAllCol), getSelectedCol(e._2, otherSelectCol, otherAllCol)))
+        new TableStream(tn, selected, selectedColumn, this.parentContext)
+      }else if (joinType == "full"){
+        val joined = grouped
+        val selected = joined.flatMap(e => cross( getSelectedCol(e._1, thisSelectCol, thisAllCol), getSelectedCol(e._2, otherSelectCol, otherAllCol)))
+        new TableStream(tn, selected, selectedColumn, this.parentContext)
+      }else{
+        throw new Exception("wrong join type")
+      }
+    }
+  }
+
+  def window(wp : WindowProperty) : TableStream = {
+    val stream = os.map(record => record.map(entry => entry._2).toArray).window(Seconds(wp.windowDuration),Seconds(wp.slideDuration))
+    val newCol = column.toList
+    new TableStream(tn, stream, newCol, this.parentContext)
+  }
+
+//  def toNewTableStream(tn:String, s:DStream[Map[Int,Entry]], selectedCol : List[Int], allSelected : Map[String, SelectItem]) : TableStream = {
+//    val stream = s.map(record => record.map(entry => entry._2).toArray)
+//    val newCol = column.zipWithIndex.filter(e => selectedCol.exists(_ == e._2) ).map(e=> getNewName(allSelected(e._1))) toList
+//    new TableStream(tn,stream, newCol, this.parentContext)
+//  }
+
+  def getNewName(si : SelectItem) : String = {
+    if(si.asName != null)
+      si.asName.name
+    else if(si.function == null && si.table == null){
+      si.selectCol.name
+    }else{
+      throw new Exception(si.toString + ": must use keyword as")
+    }
+  }
+
+  def executeSQL(statement : SelectStatement, newName : String) : TableStream = {
+    val formatJoinCond = (cond : List[(ColOfTable,ColOfTable)], thisTablename : String, otherTableName: String) => {
+      cond.map(tuple =>
+        if(tuple._1.table.name == thisTablename && tuple._2.table.name == otherTableName){
+          (tuple._1.column.name, tuple._2.column.name)
+        }else if(tuple._1.table == otherTableName && tuple._2.table == thisTablename){
+          (tuple._2.column.name, tuple._1.column.name)
+        }else{
+          throw new Exception("Wrong table name in join condition :" + tuple._1.table  + " " +  thisTablename  + " " +  tuple._2.table  + " " +  otherTableName )
+        }
+      ).toMap
+    }
+
+    val sql = statement.sql
+    var stream = this
+    sql.foreach(kvp => {
+      if(kvp._1 != "select"){
+
+        if(kvp._1 == "where"){
+          stream = stream.where(sql("where").asInstanceOf[Condition])
+        }
+        else if(kvp._1 == "window"){
+          stream = stream.window(sql("window").asInstanceOf[WindowProperty])
+        }
+        else if(kvp._1 == "groupby" || selectHasAggFunc(sql)){
+          val keySet =
+            if (sql.contains("groupby"))
+              sql("groupby").asInstanceOf[List[Identifier]].map(i => i.name).toSet
+            else
+              Set[String]()
+          stream = stream.groupBy(keySet,
+            sql("select").asInstanceOf[List[SelectItem]].filter(i => i.function != null).map(i => (i.selectCol.name, i.function.name)).toMap,
+            sql("select").asInstanceOf[List[SelectItem]].map(e => (e.selectCol.name,e)).toMap
+            )
+        }
+        else if(kvp._1 == "join"){
+          val otherTable = this.parentContext.ts(sql("join").asInstanceOf[JoinStatement].table.name)
+          val joinCond = formatJoinCond(sql("join").asInstanceOf[JoinStatement].onCol, this.tableName, sql("join").asInstanceOf[JoinStatement].table.name )
+          val left = sql("select").asInstanceOf[List[SelectItem]].filter(si => si.table.name == this.tableName).map(si => (si.selectCol.name,si)).toMap
+          val right = sql("select").asInstanceOf[List[SelectItem]].filter(si => si.table.name == sql("join").asInstanceOf[JoinStatement].table.name).map(si => (si.selectCol.name,si)).toMap
+          val joinType = sql("join").asInstanceOf[JoinStatement].joinType
+          stream = stream.join(otherTable, joinCond, left, right, joinType)
+        }
+      }
+    })
+    if(!sql.contains("join") && !sql.contains("groupby") && !selectHasAggFunc(sql)){
+      stream = stream.select(sql("select").asInstanceOf[List[SelectItem]].map(e => (e.selectCol.name,e)).toMap)
+    }
+    stream = new TableStream(newName,stream.os.map(line => line.map(kvp => kvp._2).toArray), stream.column.toList, stream.parentContext)
+    return stream
+  }
+
+  def selectHasAggFunc(sql : Map[String,Any]) : Boolean = {
+    sql("select").asInstanceOf[List[SelectItem]].map(si => if(si.function == null) 0 else 1).reduce(_+_) > 1
+  }
+
+
+  def print(d : String){
+    os.map(entry => entry.map(e => e._2.toString).reduce((str, rec) => str + d + rec)).print()
+  }
+
+  def print(){
+    print(",")
+  }
+
+
+
+}
+
+
+class Entry(value : Double, isNull : Boolean) extends Serializable{
+  val v = value
+  val n = isNull
+  def this(value : Double) = this(value, false)
+  def this(n : Null) = this(0.0, true)
+  def f(u : Entry, fn : String) : Entry = {
+    if(n)
+      u
+    else if(u.n)
+      this
+    else
+    if (fn == "sum")
+      new Entry(this.v + u.v)
+    else if (fn == "max")
+      new Entry(math.max(this.v, u.v))
+    else
+      throw new Exception("Unknown agg function")
+  }
+
+  override def toString() : String = {
+    if (n)
+      "null"
+    else
+      v.toString()
+  }
+
+
+  //is this safe?
+  override def hashCode = this.v.hashCode()
+
+  override def equals(obj : Any) : Boolean = {
+    obj.isInstanceOf[Entry] && obj.asInstanceOf[Entry].n == this.n && (this.n || obj.asInstanceOf[Entry].v == this.v  )
+  }
+}
+
