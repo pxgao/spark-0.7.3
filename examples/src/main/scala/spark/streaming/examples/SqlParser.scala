@@ -269,7 +269,7 @@ class SqlParser extends JavaTokenParsers {
 
   def dataType : Parser[String] = "int" | "double" | "string"
 
-  def iAddress : Parser[String] = """\S+""" .r
+  def iAddress : Parser[String] = """[^\s:]+""" .r
 
   def parseFile(file : String)  : List[Any] =  {
     val lines = Source.fromFile(file).getLines().toList
