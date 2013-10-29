@@ -147,8 +147,8 @@ class SqlParser extends JavaTokenParsers {
       }
 
   def input_statement : Parser[InputStatement] =
-    "input"~repsep(identifier~":"~dataType, ",")~"from"~identifier~":"~integer~"delimiter"~delimiter ^^
-      {case "input"~c~"from"~i~":"~p~"delimiter"~d => new InputStatement(i.name,p.i,d,c.map(i => (i._1._1.name,i._2)).toMap)}
+    "input"~repsep(identifier~":"~dataType, ",")~"from"~iAddress~":"~integer~"delimiter"~delimiter ^^
+      {case "input"~c~"from"~i~":"~p~"delimiter"~d => new InputStatement(i,p.i,d,c.map(i => (i._1._1.name,i._2)).toMap)}
 
   def output_statement : Parser[OutputStatement] =
     "output"~repsep(identifier, ",")~"from"~identifier~"delimiter"~delimiter ^^
@@ -268,6 +268,8 @@ class SqlParser extends JavaTokenParsers {
     (a => a.replace("\"",""))
 
   def dataType : Parser[String] = "int" | "double" | "string"
+
+  def iAddress : Parser[String] = """\S+""" .r
 
   def parseFile(file : String)  : List[Any] =  {
     val lines = Source.fromFile(file).getLines().toList
