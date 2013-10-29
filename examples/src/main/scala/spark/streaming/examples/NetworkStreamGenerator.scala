@@ -7,13 +7,12 @@ import java.util.Random
 
 object NetworkStreamGenerator {
   def main(args: Array[String]) {
-    val x = new Server(9999, 0, 1000)
-    val y = new Server(9998, 0, 1000)
-    val z = new Server(9997, -2000, 1000)
+    val x = new Server(9999, args(0).toInt, 1000)
+    val y = new Server(9998, args(1).toInt, 1000)
+    val z = new Server(9997, args(2).toInt, 1000)
     x.start()
     y.start()
     z.start()
-
   }
 }
 
