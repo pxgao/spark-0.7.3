@@ -206,12 +206,12 @@ class WindowOperator(parentOp : Operator, batches : Int, parentCtx : SqlSparkStr
   }
 
   override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
-    val startTime = System.nanoTime()
     if(!cachedTime(exec.getTime)){
       cached = cached :+ (exec.getTime, parentOperators.head.execute(exec))
       cachedTime += exec.getTime
     }
 
+    val startTime = System.nanoTime()
     while(cached.length > batches){
       val toRm = cached.head._1
       cachedTime -= toRm
@@ -242,8 +242,8 @@ class SelectOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
   }
 
   override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
-    val startTime = System.nanoTime()
     val rdd = parentOperators.head.execute(exec)
+    val startTime = System.nanoTime()
     val returnRDD =
       if(isSelectAll)
         rdd
@@ -276,11 +276,12 @@ class WhereOperator(parentOp : Operator, func : (IndexedSeq[Any], Schema) => Boo
   }
 
   override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
-    val startTime = System.nanoTime()
     val func = this.func
     val outputSchema = this.outputSchema
     val rdd = parentOperators.head.execute(exec)
-//    println("print in where op")
+    val startTime = System.nanoTime()
+
+    //    println("print in where op")
 //    SqlHelper.printRDD(rdd)
     val returnRdd = rdd.filter(record => func(record, outputSchema))
     selectivity = returnRdd.count().toDouble/rdd.count()
@@ -314,12 +315,12 @@ class GroupByOperator(parentOp : Operator, keyColumnsArr : IndexedSeq[Int], func
   }
 
   override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
-    val startTime = System.nanoTime()
     val aggregation = (x : IndexedSeq[Any], y : IndexedSeq[Any], func : Map[Int, Any]) => {
       func.map(kvp => kvp._2.asInstanceOf[(Any,Any)=>Any](x(kvp._1), y(kvp._1))).toIndexedSeq
     }
 
     val rdd = parentOperators.head.execute(exec)
+    val startTime = System.nanoTime()
     val localKeyColumnArr = this.keyColumnsArr.map(parentOp.outputSchema.getLocalIdFromGlobalId(_))
     val localFunctions = this.functions.map(kvp => (parentOp.outputSchema.getLocalIdFromGlobalId(kvp._1), kvp._2) )
     val localValueFunctions = localFunctions.zipWithIndex.map(kvp => (kvp._2,kvp._1._2))
@@ -397,8 +398,8 @@ class OutputOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
   }
 
   override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
-    val startTime = System.nanoTime()
     val rdd = parentOperators.head.execute(exec)
+    val startTime = System.nanoTime()
     val returnRDD =
       if(isSelectAll)
         rdd
@@ -437,7 +438,6 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
 
 
   override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
-    val startTime = System.nanoTime()
     val localJoinCondition = joinCondition.map(tp => (parentOperators(0).outputSchema.getLocalIdFromGlobalId(tp._1), parentOperators(1).outputSchema.getLocalIdFromGlobalId(tp._2)))
     val getLocalIdFromGlobalId = this.getLocalIdFromGlobalId
     val outputSchema = this.outputSchema
@@ -445,7 +445,7 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
     val rdd1 = parentOperators(0).execute(exec).map(record => (localJoinCondition.map(tp => record(tp._1)),record))
     val rdd2 = parentOperators(1).execute(exec).map(record => (localJoinCondition.map(tp => record(tp._2)),record))
 
-
+    val startTime = System.nanoTime()
 
 
     val joined = rdd1.join(rdd2)
