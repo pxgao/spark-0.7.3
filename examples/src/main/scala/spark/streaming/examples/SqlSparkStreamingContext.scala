@@ -42,7 +42,9 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
           recentBatchOfInputStreams += time -> scala.collection.mutable.Map[String, RDD[String]]()
         recentBatchOfInputStreams(time) += name -> rdd
         if(recentBatchOfInputStreams(time).keySet == inputStreams.keys){
-          processRDDActor ! (time,recentBatchOfInputStreams(time))
+          //processRDDActor ! (time,recentBatchOfInputStreams(time))
+          processBatch(time, recentBatchOfInputStreams(time))
+          recentBatchOfInputStreams - time
         }
       })
     })
@@ -56,16 +58,16 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
 
 
 
-  val processRDDActor = actor{
-    while(true){
-      receive{
-        case (time:Time, rdds :scala.collection.mutable.Map[String, RDD[String]]) =>
-        {
-          processBatch(time,rdds)
-        }
-      }
-    }
-  }
+//  val processRDDActor = actor{
+//    while(true){
+//      receive{
+//        case (time:Time, rdds :scala.collection.mutable.Map[String, RDD[String]]) =>
+//        {
+//          processBatch(time,rdds)
+//        }
+//      }
+//    }
+//  }
 
   var timeSum = 0.0
   var batchCount = 0
