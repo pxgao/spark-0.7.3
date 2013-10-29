@@ -16,7 +16,8 @@ class OperatorGraph(_parentCtx : SqlSparkStreamingContext) {
   val whereOperators = scala.collection.mutable.ArrayBuffer[WhereOperator]()
   val allOperators = scala.collection.mutable.ArrayBuffer[Operator]()
   val whereOperatorSets = ArrayBuffer[WhereOperatorSet]()
-  val InnerJoinOperatorSets = ArrayBuffer[InnerJoinOperatorSet]()
+  val innerJoinOperators = ArrayBuffer[InnerJoinOperator]()
+  val innerJoinOperatorSets = ArrayBuffer[InnerJoinOperatorSet]()
 
 
 
@@ -26,6 +27,9 @@ class OperatorGraph(_parentCtx : SqlSparkStreamingContext) {
       outputOperators += operator.asInstanceOf[OutputOperator]
     if(operator.isInstanceOf[WhereOperator])
       whereOperators += operator.asInstanceOf[WhereOperator]
+    if(operator.isInstanceOf[InnerJoinOperator])
+      innerJoinOperators += operator.asInstanceOf[InnerJoinOperator]
+
 
   }
 
@@ -71,7 +75,7 @@ class OperatorGraph(_parentCtx : SqlSparkStreamingContext) {
         if(set.isEmpty){
           val newSet = new InnerJoinOperatorSet(parentCtx)
           newSet.addInnerJoinOperator(op.asInstanceOf[InnerJoinOperator])
-          InnerJoinOperatorSets += newSet
+          innerJoinOperatorSets += newSet
           op.childOperators.foreach(c => c.replaceParent(op, newSet))
           op.parentOperators.foreach(p => visit(p, Some(newSet)))
         }else{

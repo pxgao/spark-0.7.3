@@ -1,6 +1,6 @@
-t = input a:int,b:int,c:int,d:int from localhost:9999 delimiter ","
-tw = select a,b,c,d from t where a > 1 window 5 5
-x = select a,b from tw
-y = select c,d from tw
-j = select x.a as a, x.b as b, y.c as c, y.d as d from x inner join y on x.a = y.c
-output a,b,c,d from j delimiter ","
+x = input a:int,b:int from localhost:9999 delimiter ","
+y = input c:int,d:int from localhost:9998 delimiter ","
+z = input e:int,f:int from localhost:9997 delimiter ","
+tw = select x.a as a, x.b as b, y.c as c, y.d as d, z.e as e, z.f as f from x inner join y on x.a = y.c inner join z on x.a = z.e
+gp = select sum(b) as sumb from tw
+output sumb from gp delimiter ","

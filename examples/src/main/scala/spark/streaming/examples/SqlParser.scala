@@ -157,7 +157,26 @@ class SqlParser extends JavaTokenParsers {
 	def select_statement : Parser[SelectStatement] =
 		select~from~rep(clause) ^^
 		{
-			case s~f~c => new SelectStatement(Map() + s + f ++ c.toMap)
+			case s~f~c => {
+        var clauses = Map[String, Any]()
+        c.foreach(kvp => {
+          if(kvp._1 == "where" || kvp._1 == "groupby" || kvp._1 == "window")
+            if(!clauses.contains(kvp._1))
+              clauses += kvp
+            else
+              failure("Duplicated " + kvp._1)
+          else if(kvp._1 == "join")
+            if(!clauses.contains(kvp._1))
+              clauses += kvp._1 -> List(kvp._2)
+            else
+            {
+              val oldList = clauses(kvp._1).asInstanceOf[List[JoinStatement]]
+              clauses -= kvp._1
+              clauses += kvp._1 -> (oldList :+ kvp._2)
+            }
+        })
+        new SelectStatement(Map() + s + f ++ clauses)
+      }
 		}
 
 	//need sth to avoid duplicated where....
@@ -181,7 +200,8 @@ class SqlParser extends JavaTokenParsers {
 		"group by"~>repsep(identifier,",") ^^
 		{i => ("groupby",i)}
 
-  def join : Parser[(String, JoinStatement)] =
+
+  def join : Parser[(String,JoinStatement)] =
     ("inner" | "left" | "right" | "full")~"join"~identifier~"on"~repsep(joincond, "and") ^^
       {case jtype~"join"~tab~"on"~onCol => ("join",new JoinStatement(jtype, tab, onCol)) }
 

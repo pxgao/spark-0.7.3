@@ -342,9 +342,11 @@ class ParseOperator(schema : Schema, delimiter : String, inputStreamName : Strin
         }
       }
 
-      val lineArr = line.split(delimiter).toIndexedSeq
-      if (lineArr.length != outputSchema.getSchemaArray.length)
+      val lineArr = line.trim.split(delimiter).toIndexedSeq
+
+      if (lineArr.length != outputSchema.getSchemaArray.length){
         IndexedSeq[Any]()
+      }
       else
         try{
           lineArr.zipWithIndex.map(entry => parse(entry._1, outputSchema.getSchemaArray(entry._2)._1 ))
@@ -354,7 +356,7 @@ class ParseOperator(schema : Schema, delimiter : String, inputStreamName : Strin
     }
 
     val rdd = exec.getInputRdds(inputStreamName)
-    rdd.map(line => parseLine(line)).filter(line => line.size > 0)
+    rdd.map(line => parseLine(line)).filter(line => line.length > 0)
   }
 
   override def setParent(parentOp : Operator){}
@@ -427,11 +429,14 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
 
 
     val joined = rdd1.join(rdd2)
-    joined.map(pair => {
+    val result = joined.map(pair => {
       val combined = pair._2._1 ++ pair._2._2
       outputSchema.getSchemaArray.map(kvp => combined(getLocalIdFromGlobalId(kvp._2)))
     }
     )
+    val sel = result.count().toDouble / (rdd1.count() * rdd2.count() )
+    selectivity = sel
+    result
   }
 
   def getJoinCondition = joinCondition

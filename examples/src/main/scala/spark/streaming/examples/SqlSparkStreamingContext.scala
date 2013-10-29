@@ -54,6 +54,38 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
   }
 
 
+
+
+  val processRDDActor = actor{
+    while(true){
+      receive{
+        case (time:Time, rdds :scala.collection.mutable.Map[String, RDD[String]]) =>
+        {
+          processBatch(time,rdds)
+        }
+      }
+    }
+  }
+
+  var timeSum = 0.0
+  var batchCount = 0
+  var usedCount = 0
+  def processBatch(time:Time, rdds :scala.collection.mutable.Map[String, RDD[String]]){
+    println("running " + time)
+    val starttime = System.nanoTime()
+    val exec = new Execution(time,rdds)
+    operatorGraph.execute(SqlHelper.printRDD,exec)
+    val timeUsed = (System.nanoTime() - starttime)/1000000.0
+    if(batchCount > 10){
+      timeSum += timeUsed
+      usedCount += 1
+    }
+    batchCount += 1
+    println("execution time in ms:" + timeUsed + "Avg:" + (timeSum/usedCount))
+    operatorGraph.innerJoinOperators.foreach(println(_))
+  }
+
+
   def executeQuery(q : Any) = q match{
     case (t:Identifier, s:SelectStatement) => {
       executeSelectQuery(t,s)
@@ -71,8 +103,10 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
     case c:Comment => {}
   }
 
+
+
   def executeSelectQuery(t : Identifier, s: SelectStatement){
-    def getFunctionFromName(name : String, typeName : String) = {
+    def getFunctionFromName(name : String, typeName : String) : Any = {
       typeName match{
         case "int" => {
           name match{
@@ -84,9 +118,9 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
         }
         case "double" => {
           name match{
-            case "sum" => ((a:Int, b:Int) => a + b)
-            case "max" => ((a:Int, b:Int) => scala.math.max(a,b))
-            case "min" => ((a:Int, b:Int) => scala.math.min(a,b))
+            case "sum" => ((a:Double, b:Double) => a + b)
+            case "max" => ((a:Double, b:Double) => scala.math.max(a,b))
+            case "min" => ((a:Double, b:Double) => scala.math.min(a,b))
 
           }
         }
@@ -116,10 +150,21 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
     if(sql.contains("window")){
       tailOperator = new WindowOperator(tailOperator, sql("window").asInstanceOf[WindowProperty].windowDuration, this)
     }
-    if(sql.contains("groupby")){
-      val keys = sql("groupby").asInstanceOf[List[Identifier]].map(i => fromTable.getTypeGIDFromName(i.name)._2).toIndexedSeq
+    if(sql.contains("groupby") ||
+      sql("select").asInstanceOf[List[SelectItem]]
+        .map(si => if(si.function != null) 1 else 0)
+        .reduce(_+_) > 0)
+    {
+      val keys =
+        if(sql.contains("groupby"))
+          sql("groupby").asInstanceOf[List[Identifier]].map(i => fromTable.getTypeGIDFromName(i.name)._2).toIndexedSeq
+        else
+          IndexedSeq[Int]()
 
-      val functions = sql("select").asInstanceOf[List[SelectItem]].filter(i => i.function != null).map(i => (fromTable.getTypeGIDFromName(i.selectCol.name)._2, getFunctionFromName(i.function.name, fromTable.getTypeGIDFromName(i.selectCol.name)._1))).toMap
+      println(getTypeGIDFromName)
+      println( sql("select").asInstanceOf[List[SelectItem]])
+
+      val functions = sql("select").asInstanceOf[List[SelectItem]].filter(i => i.function != null).map(i => (getTypeGIDFromName(i.selectCol.name)._2, getFunctionFromName(i.function.name, getTypeGIDFromName(i.selectCol.name)._1))).toMap
       val getNewNameFromOldGID = sql("select").asInstanceOf[List[SelectItem]].filter(i => i.function != null).map(i => (fromTable.getTypeGIDFromName(i.selectCol.name)._2, i.asName.name)).toMap
 
       val groupByOp = new GroupByOperator(tailOperator,keys,functions,this)
@@ -136,69 +181,68 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
           },
           (tp._1, tp._2)
           )).toMap
-      println("getTypeGIDFromName" + getTypeGIDFromName)
 
 
     }
     if(sql.contains("join")){
-      val j = sql("join").asInstanceOf[JoinStatement]
-      val rightTable = tables(j.table.name)
-      if(j.joinType == "inner"){
-        val leftParent = tailOperator
-        val rightParent = rightTable.getSinkOperator
-        val joinCond = j.onCol.map(tp => {
-          if(joinedTables.contains(tp._1.table.name)
-            && tp._2.table.name == j.table.name){
-            ( if(getTypeGIDFromName.contains(tp._1.column.name))
-                getTypeGIDFromName(tp._1.column.name)._2
-              else if(getTypeGIDFromName.contains(tp._1.table.name + "." + tp._1.column.name))
-                getTypeGIDFromName(tp._1.table.name + "." + tp._1.column.name)._2
-              else
-                throw new Exception("Can't find  table name")
-              ,
-              rightTable.getTypeGIDFromName(tp._2.column.name)._2)
-          } else if(joinedTables.contains(tp._2.table.name)
-            && tp._1.table.name == j.table.name){
-            (rightTable.getTypeGIDFromName(tp._2.column.name)._2,
-              if(getTypeGIDFromName.contains(tp._1.column.name))
-                getTypeGIDFromName(tp._1.column.name)._2
-              else if(getTypeGIDFromName.contains(tp._1.table.name + "." + tp._1.column.name))
-                getTypeGIDFromName(tp._1.table.name + "." + tp._1.column.name)._2
-              else
-                throw new Exception("Can't find  table name")
-              )
-          }else{
-            throw new Exception("join condition mismatch")
-          }
-        }).toIndexedSeq
-        joinedTables += j.table.name -> tables(j.table.name)
-        tailOperator = new InnerJoinOperator(leftParent,rightParent, joinCond, this)
+      sql("join").asInstanceOf[List[JoinStatement]].foreach(j => {
+        val rightTable = tables(j.table.name)
+        if(j.joinType == "inner"){
+          val leftParent = tailOperator
+          val rightParent = rightTable.getSinkOperator
+          val joinCond = j.onCol.map(tp => {
+            if(joinedTables.contains(tp._1.table.name)
+              && tp._2.table.name == j.table.name){
+              ( if(getTypeGIDFromName.contains(tp._1.column.name))
+                  getTypeGIDFromName(tp._1.column.name)._2
+                else if(getTypeGIDFromName.contains(tp._1.table.name + "." + tp._1.column.name))
+                  getTypeGIDFromName(tp._1.table.name + "." + tp._1.column.name)._2
+                else
+                  throw new Exception("Can't find  table name")
+                ,
+                rightTable.getTypeGIDFromName(tp._2.column.name)._2)
+            } else if(joinedTables.contains(tp._2.table.name)
+              && tp._1.table.name == j.table.name){
+              (rightTable.getTypeGIDFromName(tp._2.column.name)._2,
+                if(getTypeGIDFromName.contains(tp._1.column.name))
+                  getTypeGIDFromName(tp._1.column.name)._2
+                else if(getTypeGIDFromName.contains(tp._1.table.name + "." + tp._1.column.name))
+                  getTypeGIDFromName(tp._1.table.name + "." + tp._1.column.name)._2
+                else
+                  throw new Exception("Can't find  table name")
+                )
+            }else{
+              throw new Exception("join condition mismatch")
+            }
+          }).toIndexedSeq
+          joinedTables += j.table.name -> tables(j.table.name)
+          tailOperator = new InnerJoinOperator(leftParent,rightParent, joinCond, this)
 
-        val getNameTypeFromGID = getTypeGIDFromName.map(tp => (tp._2._2,(tp._1,tp._2._1))).toMap
-        val rightTable_getNameTypeFromGID = rightTable.getTypeGIDFromName.map(tp => (tp._2._2,(tp._1,tp._2._1))).toMap
-        getTypeGIDFromName = tailOperator.outputSchema.getSchemaArray.map(tp => {
-          (
-          if(getNameTypeFromGID.contains(tp._2)){
-            val newName = getNameTypeFromGID(tp._2)._1
-            if(!newName.contains("."))
-              sql("from").asInstanceOf[Identifier].name + "." + newName
+          val getNameTypeFromGID = getTypeGIDFromName.map(tp => (tp._2._2,(tp._1,tp._2._1))).toMap
+          val rightTable_getNameTypeFromGID = rightTable.getTypeGIDFromName.map(tp => (tp._2._2,(tp._1,tp._2._1))).toMap
+          getTypeGIDFromName = tailOperator.outputSchema.getSchemaArray.map(tp => {
+            (
+            if(getNameTypeFromGID.contains(tp._2)){
+              val newName = getNameTypeFromGID(tp._2)._1
+              if(!newName.contains("."))
+                sql("from").asInstanceOf[Identifier].name + "." + newName
+              else
+                newName
+            }
+            else if(rightTable_getNameTypeFromGID.contains(tp._2)){
+              println("join " + j.table.name + "." + rightTable_getNameTypeFromGID(tp._2)._1 )
+              j.table.name + "." + rightTable_getNameTypeFromGID(tp._2)._1
+            }
             else
-              newName
-          }
-          else if(rightTable_getNameTypeFromGID.contains(tp._2)){
-            println("join " + j.table.name + "." + rightTable_getNameTypeFromGID(tp._2)._1 )
-            j.table.name + "." + rightTable_getNameTypeFromGID(tp._2)._1
-          }
-          else
-            throw new Exception("Can't find GID")
-          ,
-          (tp._1, tp._2))
-        }).toMap
-      }
-
+              throw new Exception("Can't find GID")
+            ,
+            (tp._1, tp._2))
+          }).toMap
+        }
+      })
     }
 
-    val selectCol = sql("select").asInstanceOf[List[SelectItem]].map(si => {
+    val getSelectItemFromGID = sql("select").asInstanceOf[List[SelectItem]].map(si => ({
       if(si.asName != null && getTypeGIDFromName.contains(si.asName.name))
         getTypeGIDFromName(si.asName.name)._2
       else if(si.table != null && si.selectCol != null && getTypeGIDFromName.contains(si.table.name + "." + si.selectCol.name))
@@ -207,37 +251,26 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
         getTypeGIDFromName(si.selectCol.name)._2
       else
         throw new Exception("cant find name")
-    }).toIndexedSeq
+    },si)).toMap
 
-    tailOperator = new SelectOperator(tailOperator,selectCol,this)
+    tailOperator = new SelectOperator(tailOperator,getSelectItemFromGID.keys.toIndexedSeq,this)
 
-    val selectColSet = selectCol.toSet
-    getTypeGIDFromName = getTypeGIDFromName.filter(tp => selectColSet(tp._2._2))
+    getTypeGIDFromName = getTypeGIDFromName.filter(tp => getSelectItemFromGID.contains(tp._2._2)).map(tp => (
+      {
+        val si = getSelectItemFromGID(tp._2._2)
+        if(si.asName != null)
+          si.asName.name
+        else
+          si.selectCol.name
+      }
+      ,tp._2))
 
-    println("getTypeGIDFromName" + getTypeGIDFromName)
 
     tables += t.name -> new Table(getTypeGIDFromName, tailOperator)
   }
 
 
 
-
-  val processRDDActor = actor{
-    while(true){
-      receive{
-        case (time:Time, rdds :scala.collection.mutable.Map[String, RDD[String]]) =>
-        {
-          processBatch(time,rdds)
-        }
-      }
-    }
-  }
-
-  def processBatch(time:Time, rdds :scala.collection.mutable.Map[String, RDD[String]]){
-    println("running " + time)
-    val exec = new Execution(time,rdds)
-    operatorGraph.execute(SqlHelper.printRDD,exec)
-  }
 
 
   def test(){
