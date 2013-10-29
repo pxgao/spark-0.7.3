@@ -325,9 +325,9 @@ class GroupByOperator(parentOp : Operator, keyColumnsArr : IndexedSeq[Int], func
     val localValueFunctions = localFunctions.zipWithIndex.map(kvp => (kvp._2,kvp._1._2))
     val kvpRdd = rdd.map(record => (localKeyColumnArr.map(record(_)).toIndexedSeq, localFunctions.map(kvp => record(kvp._1)).toIndexedSeq))
     val reduced = kvpRdd.reduceByKey((x,y) => aggregation(x,y,localValueFunctions))
-    val returnRDD = reduced.map(kvp => kvp._1 ++ kvp._2)
+    val rr = reduced.map(kvp => kvp._1 ++ kvp._2)
     exec.executionTimes += this -> (System.nanoTime() - startTime)
-    returnRDD
+    rr.map(arr => arr.toIndexedSeq)
   }
 
   override def toString = super.toString + "keys:" + keyColumnsArr + " values:" + functions
