@@ -367,7 +367,7 @@ class Table(nameTypeGID : Map[String,(String, Int)], sinkOperator : Operator){
 
 object SqlHelper{
   def printRDD(rdd : RDD[_]) {
-    rdd.foreach(record => record match {
+    rdd.collect.foreach(record => record match {
       case record:IndexedSeq[Any] => println(record.toList)
       case record:Any => println(record)
     })
