@@ -436,7 +436,7 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
     val rdd2 = parentOperators(1).execute(exec).map(record => (localJoinCondition.map(tp => record(tp._2)),record))
 
 
-
+    //use a fully random partitioner, and then map partition
     val joined = rdd1.join(rdd2)
     val result = joined.map(pair => {
       val combined = pair._2._1 ++ pair._2._2
@@ -453,9 +453,9 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
       receive{
         case (rdd1 : RDD[IndexedSeq[Any]], rdd2 : RDD[IndexedSeq[Any]], joined : RDD[IndexedSeq[Any]]) =>
         {
-          val joinedSize = joined.sample(true, 0.01, 0).count()
-          val rdd1Size = rdd1.sample(true, 0.01, 0).count()
-          val rdd2Size = rdd2.sample(true, 0.01, 0).count()
+          val joinedSize = joined.sample(true, 0.001, 0).count()
+          val rdd1Size = rdd1.sample(true, 0.001, 0).count()
+          val rdd2Size = rdd2.sample(true, 0.001, 0).count()
           if(rdd1Size > 0 && rdd2Size > 0)
           {
             selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)
