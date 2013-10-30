@@ -5,7 +5,8 @@ import spark.RDD
 import scala.collection.mutable
 import spark.SparkContext._
 import scala.collection.mutable.ArrayBuffer
-
+import scala.actors.Actor._
+import scala.actors.Actor
 /**
  * Created with IntelliJ IDEA.
  * User: peter
@@ -454,10 +455,22 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
       outputSchema.getSchemaArray.map(kvp => combined(getLocalIdFromGlobalId(kvp._2)))
     }
     )
-    val sel = result.count().toDouble / (rdd1.count() * rdd2.count() )
-    selectivity = sel
     exec.executionTimes += this -> (System.nanoTime() - startTime)
+    getSelectivityActor ! (rdd1,rdd2, joined)
     result
+  }
+
+
+  val getSelectivityActor = actor{
+    while(true){
+      receive{
+        case (rdd1 : RDD[IndexedSeq[Any]], rdd2 : RDD[IndexedSeq[Any]], joined : RDD[IndexedSeq[Any]]) =>
+        {
+          val sel = joined.sample(true, 0.01, 0).count()/(rdd1.sample(true, 0.01, 0).count() * rdd2.sample(true, 0.01, 0).count())
+          selectivity = sel
+        }
+      }
+    }
   }
 
   def getJoinCondition = joinCondition
