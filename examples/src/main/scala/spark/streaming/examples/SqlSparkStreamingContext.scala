@@ -85,7 +85,6 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
     batchCount += 1
     println("execution time in ms:" + timeUsed + "Avg:" + (timeSum/usedCount))
     operatorGraph.innerJoinOperators.foreach(println(_))
-    exec.executionTimes.foreach(tp => println(tp._1 + ":" + tp._2))
   }
 
 
@@ -349,7 +348,6 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
 class Execution(time:Time, inputRdds :scala.collection.mutable.Map[String, RDD[String]]){
   def getInputRdds = inputRdds
   def getTime = time
-  val executionTimes = scala.collection.mutable.Map[Operator,Long]()
 }
 
 
