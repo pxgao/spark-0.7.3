@@ -458,7 +458,7 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
           val rdd2Size = rdd2.sample(true, 0.01, 0).count()
           if(rdd1Size > 0 && rdd2Size > 0)
           {
-            selectivity = joinedSize /(rdd1Size * rdd2Size)
+            selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)
           }
         }
       }
