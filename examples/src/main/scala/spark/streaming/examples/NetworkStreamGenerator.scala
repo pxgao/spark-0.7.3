@@ -94,7 +94,7 @@ class Server(port : Int, _mean:Double = 0.0, _sd : Double = 100.0) extends Threa
         val out = new DataOutputStream(socket.getOutputStream())
 
         while (true) {
-         val x = ( getGaussian() + "," + mean + "\n").getBytes()
+         val x = ( getGaussian() + "," + mean.toInt + "\n").getBytes()
          out.write(x)
           count += 1
          //print(new String(x))

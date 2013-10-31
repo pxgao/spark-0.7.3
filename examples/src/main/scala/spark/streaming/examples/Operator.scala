@@ -422,6 +422,7 @@ class OutputOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
   }
 
   override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+
     val rdd = parentOperators.head.execute(exec)
     val returnRDD =
       if(isSelectAll)
