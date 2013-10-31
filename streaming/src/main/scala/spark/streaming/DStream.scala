@@ -2,6 +2,11 @@ package spark.streaming
 
 import spark.streaming.dstream._
 import StreamingContext._
+import scala.Some
+import scala.Serializable
+import spark.streaming.Duration
+
+
 //import Time._
 
 import spark.{RDD, Logging}
@@ -10,7 +15,7 @@ import spark.storage.StorageLevel
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.mutable.HashMap
 
-import java.io.{ObjectInputStream, IOException, ObjectOutputStream}
+import java.io._
 
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.hadoop.conf.Configuration
@@ -495,6 +500,8 @@ abstract class DStream[T: ClassManifest] (
    * Print the first ten elements of each RDD generated in this DStream. This is an output
    * operator, so this DStream will be registered as an output stream and there materialized.
    */
+
+
   def print() {
     def foreachFunc = (rdd: RDD[T], time: Time) => {
       val first11 = rdd.take(11)
@@ -504,6 +511,7 @@ abstract class DStream[T: ClassManifest] (
       first11.take(10).foreach(println)
       if (first11.size > 10) println("...")
       println()
+      println("~~Time " + (System.currentTimeMillis() - time.milliseconds))
     }
     val newStream = new ForEachDStream(this, context.sparkContext.clean(foreachFunc))
     ssc.registerOutputStream(newStream)
@@ -681,3 +689,4 @@ abstract class DStream[T: ClassManifest] (
     ssc.registerOutputStream(this)
   }
 }
+
