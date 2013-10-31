@@ -37,10 +37,14 @@ object NetworkStreamGenerator {
         started = true
         var count = 0
         while(true){
-          if(count%40 == 0)
+          if(count%40 == 0){
             x.mean = m1
-          if(count%40 == 20)
+            println("x.mean = " + x.mean)
+          }
+          if(count%40 == 20){
             x.mean = m2
+            println("x.mean = " + x.mean)
+          }
           count +=1
           Thread.sleep(1000)
         }
