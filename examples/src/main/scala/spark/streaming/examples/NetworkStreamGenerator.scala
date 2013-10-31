@@ -23,9 +23,9 @@ object NetworkStreamGenerator {
 
     p = args(2).toInt
 
-    x = new Server(9999, m1, 1000)
-    y = new Server(9998, m1, 1000)
-    z = new Server(9997, m2, 1000)
+    x = new Server(9999, m1, 100)
+    y = new Server(9998, m1, 100)
+    z = new Server(9997, m2, 100)
 
     x.start()
     y.start()
@@ -98,7 +98,7 @@ class Server(port : Int, _mean:Double = 0.0, _sd : Double = 100.0) extends Threa
          out.write(x)
           count += 1
          //print(new String(x))
-         if(count%5 == 0)
+         if(count%50 == 0)
           Thread.sleep(1)
         }
 
