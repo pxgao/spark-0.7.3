@@ -98,7 +98,7 @@ class Server(port : Int, _mean:Double = 0.0, _sd : Double = 100.0) extends Threa
          out.write(x)
           count += 1
          //print(new String(x))
-         if(count%50 == 0)
+         if(count%5 == 0)
           Thread.sleep(1)
         }
 
