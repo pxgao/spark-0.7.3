@@ -4,20 +4,53 @@ import java.io._
 import java.net.{InetAddress,ServerSocket,Socket,SocketException}
 import java.util.Random
 
+import scala.actors.Actor._
+import scala.actors.Actor
 
 object NetworkStreamGenerator {
+  var x :Server = null
+  var y :Server = null
+  var z :Server = null
+
+  var m1 = 0
+  var m2 = 3000
+
   def main(args: Array[String]) {
-    val x = new Server(9999, args(0).toInt, 1000)
-    val y = new Server(9998, args(1).toInt, 1000)
-    val z = new Server(9997, args(2).toInt, 1000)
+    m1 = args(0).toInt
+    m2 = args(1).toInt
+
+    x = new Server(9999, m1, 1000)
+    y = new Server(9998, m1, 1000)
+    z = new Server(9997, m2, 1000)
+
     x.start()
     y.start()
     z.start()
   }
+
+  var started = false
+
+  val timerActor = actor{
+    receive{
+      case "start" =>
+      {
+        started = true
+        var count = 0
+        while(true){
+          if(count%40 == 0)
+            x.mean = m1
+          if(count%40 == 20)
+            x.mean = m2
+          count +=1
+          Thread.sleep(1000)
+        }
+      }
+    }
+  }
 }
 
 class Server(port : Int, _mean:Double = 0.0, _sd : Double = 100.0) extends Thread{
-  val rand = new Random(System.currentTimeMillis())
+  val rand = new Random(port)
   var mean = _mean;
   var sd = _sd;
 
@@ -45,6 +78,8 @@ class Server(port : Int, _mean:Double = 0.0, _sd : Double = 100.0) extends Threa
   case class ServerThread(socket: Socket) extends Thread("ServerThread") {
 
     override def run(): Unit = {
+      if(!NetworkStreamGenerator.started)
+        NetworkStreamGenerator.timerActor ! "start"
       println("accepted conn:" + socket.getPort)
       var count = 0
       try {

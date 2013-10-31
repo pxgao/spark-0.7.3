@@ -55,8 +55,10 @@ class InnerJoinOperatorSet(parentCtx : SqlSparkStreamingContext) extends Operato
 
   def addInnerJoinOperator(op : InnerJoinOperator){
     innerJoinOperators += op
-    if(innerJoinOperators.size == 1)
+    if(innerJoinOperators.size == 1){
       outputSchema = op.outputSchema
+      tailOperator = op
+    }
   }
 
   def addParent(op : Operator){
@@ -242,6 +244,8 @@ class SelectOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
   }
 
   override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+
+
     val rdd = parentOperators.head.execute(exec)
     val returnRDD =
       if(isSelectAll)
@@ -319,6 +323,7 @@ class GroupByOperator(parentOp : Operator, keyColumnsArr : IndexedSeq[Int], func
   }
 
   override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+
     val createCombiner = (x : IndexedSeq[Any], func : Map[Int, GroupByCombiner]) => {
       func.map(kvp => kvp._2.getCreateCombiner(x(kvp._1))).toIndexedSeq
     }
@@ -364,6 +369,7 @@ class ParseOperator(schema : Schema, delimiter : String, inputStreamName : Strin
   outputSchema = schema
 
   override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+
     val outputSchema = this.outputSchema
     val delimiter = this.delimiter
     val parseLine =  (line : String) => {
@@ -409,8 +415,7 @@ class OutputOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
   outputSchema = new Schema(selectColGlobalId.map(gid => (parentOperators.head.outputSchema.getClassFromGlobalId(gid),gid)))
 
   override def setParent(parentOp : Operator){
-    println("parent schema: " + parentOp.outputSchema)
-    println("this select: " + selectColGlobalId)
+
     super.setParent(parentOp)
     isSelectAll = selectColGlobalId.toSeq.equals(parentOperators.head.outputSchema.getLocalIdFromGlobalId.keySet)
     localColId = selectColGlobalId.map(gid => parentOp.outputSchema.getLocalIdFromGlobalId(gid))
@@ -441,7 +446,7 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
   val rightJoinSet = joinCondition.map(tp=>tp._2).toSet
 
 
-  var selectivity = 1.0
+  var selectivity : Double = 1.0
 
   override def setParents(parentOp1 : Operator, parentOp2 : Operator){
     super.setParents(parentOp1, parentOp2)
@@ -455,6 +460,7 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
 
 
   override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+
     val localJoinCondition = joinCondition.map(tp => (parentOperators(0).outputSchema.getLocalIdFromGlobalId(tp._1), parentOperators(1).outputSchema.getLocalIdFromGlobalId(tp._2)))
     val getLocalIdFromGlobalId = this.getLocalIdFromGlobalId
     val outputSchema = this.outputSchema
@@ -470,27 +476,36 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
       outputSchema.getSchemaArray.map(kvp => combined(getLocalIdFromGlobalId(kvp._2)))
     }
     )
-    getSelectivityActor ! (rdd1,rdd2, joined)
+
+    val joinedSize = joined.sample(true, 0.01, 0).count()
+    val rdd1Size = rdd1.sample(true, 0.01, 0).count()
+    val rdd2Size = rdd2.sample(true, 0.01, 0).count()
+    if(rdd1Size > 0 && rdd2Size > 0)
+    {
+      selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)
+    }
+
+    //getSelectivityActor ! (rdd1,rdd2, joined)
     result
   }
 
 
-  val getSelectivityActor = actor{
-    while(true){
-      receive{
-        case (rdd1 : RDD[IndexedSeq[Any]], rdd2 : RDD[IndexedSeq[Any]], joined : RDD[IndexedSeq[Any]]) =>
-        {
-          val joinedSize = joined.sample(true, 0.001, 0).count()
-          val rdd1Size = rdd1.sample(true, 0.001, 0).count()
-          val rdd2Size = rdd2.sample(true, 0.001, 0).count()
-          if(rdd1Size > 0 && rdd2Size > 0)
-          {
-            selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)
-          }
-        }
-      }
-    }
-  }
+//  val getSelectivityActor = actor{
+//    while(true){
+//      receive{
+//        case (rdd1 : RDD[IndexedSeq[Any]], rdd2 : RDD[IndexedSeq[Any]], joined : RDD[IndexedSeq[Any]]) =>
+//        {
+//          val joinedSize = joined.sample(true, 0.001, 0).count()
+//          val rdd1Size = rdd1.sample(true, 0.001, 0).count()
+//          val rdd2Size = rdd2.sample(true, 0.001, 0).count()
+//          if(rdd1Size > 0 && rdd2Size > 0)
+//          {
+//            selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)
+//          }
+//        }
+//      }
+//    }
+//  }
 
   def getJoinCondition = joinCondition
   override def toString = super.toString + joinCondition + " Sel:" + selectivity

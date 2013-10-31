@@ -5,6 +5,9 @@ import spark.RDD
 import scala.actors.Actor._
 import scala.actors.Actor
 import scala.collection.immutable
+import scala.io._
+import java.io.{File, PrintWriter}
+import java.util.Calendar
 
 /**
  * Created with IntelliJ IDEA.
@@ -20,6 +23,7 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
   val operatorGraph = new OperatorGraph(this)
   val tables = scala.collection.mutable.Map[String, Table]()
   val parser = new SqlParser()
+  var args :Array[String] = null
 
 
   object columns {
@@ -33,6 +37,7 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
 
 
   def start(){
+    operatorGraph.groupInnerJoin();
 
     inputStreams.foreach(kvp => {
       val name = kvp._1
@@ -73,6 +78,8 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
   var batchCount = 0
   var usedCount = 0
   def processBatch(time:Time, rdds :scala.collection.mutable.Map[String, RDD[String]]){
+    if(args.length > 1 && args(1) == "-o")
+      operatorGraph.innerJoinOperatorSets.foreach(s => s.optimize())
     println("running " + time)
     val starttime = System.nanoTime()
     val exec = new Execution(time,rdds)
@@ -83,7 +90,8 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
       usedCount += 1
     }
     batchCount += 1
-    println("execution time in ms:" + timeUsed + "Avg:" + (timeSum/usedCount))
+    println("execution time in ms:" + timeUsed + " Avg:" + (timeSum/usedCount))
+    SqlHelper.writeln(timeUsed.toString)
     operatorGraph.innerJoinOperators.foreach(println(_))
   }
 
@@ -322,7 +330,8 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
 
 
 
-  def test(){
+  def test(args : Array[String]){
+    this.args = args
     val parsedLines = parser.parseFile("sql.txt")
     parsedLines.foreach(p => executeQuery(p) )
 
@@ -421,4 +430,12 @@ object SqlHelper{
       case record:Any => println(record)
     })
   }
+
+  private val results = new PrintWriter(new File("results/" + Calendar.getInstance().getTime  + ".txt" ))
+
+  def write(s : String) = {
+    results.write(s)
+    results.flush()
+  }
+  def writeln(s : String) = write(s + "\n")
 }
