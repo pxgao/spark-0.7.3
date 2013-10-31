@@ -108,22 +108,68 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
 
 
   def executeSelectQuery(t : Identifier, s: SelectStatement){
-    def getFunctionFromName(name : String, typeName : String) : Any = {
+    def getFunctionFromName(name : String, typeName : String) : GroupByCombiner = {
+      //createCombiner: V => C,
+      //mergeValue: (C, V) => C,
+      //mergeCombiners: (C, C) => C,
+      //final processing: C => U
       typeName match{
         case "int" => {
           name match{
-            case "sum" => ((a:Int, b:Int) => a + b)
-            case "max" => ((a:Int, b:Int) => scala.math.max(a,b))
-            case "min" => ((a:Int, b:Int) => scala.math.min(a,b))
+            case "sum" => new GroupByCombiner(
+              ((a : Int) => a),
+              ((a:Int, b:Int) => a + b),
+              ((a:Int, b:Int) => a + b),
+              ((a : Int) => a),
+              "int")
+            case "max" =>  new GroupByCombiner(
+              ((a : Int) => a),
+              ((a:Int, b:Int) => scala.math.max(a,b)),
+              ((a:Int, b:Int) => scala.math.max(a,b)),
+              ((a : Int) => a),
+              "int")
+            case "min" =>  new GroupByCombiner(
+              ((a : Int) => a),
+              ((a:Int, b:Int) => scala.math.min(a,b)),
+              ((a:Int, b:Int) => scala.math.min(a,b)),
+              ((a : Int) => a),
+              "int")
+            case "avg" =>  new GroupByCombiner(
+              ((a : Int) => (a,1)),
+              ((t : Tuple2[Int,Int], b:Int) => (t._1 + b ,t._2 + 1)),
+              ((t1:Tuple2[Int,Int], t2:Tuple2[Int,Int]) => (t1._1 + t2._1, t1._2 + t2._2)),
+              ((t : Tuple2[Int,Int]) => t._1.toDouble/t._2),
+              "double")
+
 
           }
         }
         case "double" => {
           name match{
-            case "sum" => ((a:Double, b:Double) => a + b)
-            case "max" => ((a:Double, b:Double) => scala.math.max(a,b))
-            case "min" => ((a:Double, b:Double) => scala.math.min(a,b))
-
+            case "sum" =>  new GroupByCombiner(
+              ((a : Double) => a),
+              ((a:Double, b:Double) => a + b),
+              ((a:Double, b:Double) => a + b),
+              ((a : Double) => a),
+              "double")
+            case "max" =>  new GroupByCombiner(
+              ((a : Double) => a),
+              ((a:Double, b:Double) => scala.math.max(a,b)),
+              ((a:Double, b:Double) => scala.math.max(a,b)),
+              ((a : Double) => a),
+              "double")
+            case "min" =>  new GroupByCombiner(
+              ((a : Double) => a),
+              ((a:Double, b:Double) => scala.math.min(a,b)),
+              ((a:Double, b:Double) => scala.math.min(a,b)),
+              ((a : Double) => a),
+              "double")
+            case "avg" =>  new GroupByCombiner(
+              ((a : Double) => (a,1)),
+              ((t : Tuple2[Double,Int], b:Double) => (t._1 + b ,t._2 + 1)),
+              ((t1:Tuple2[Double,Int], t2:Tuple2[Double,Int]) => (t1._1 + t2._1, t1._2 + t2._2)),
+              ((t : Tuple2[Double,Int]) => t._1/t._2),
+              "double")
           }
         }
       }
@@ -157,14 +203,14 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
         .map(si => if(si.function != null) 1 else 0)
         .reduce(_+_) > 0)
     {
-      val keys =
-        if(sql.contains("groupby"))
-          sql("groupby").asInstanceOf[List[Identifier]].map(i => fromTable.getTypeGIDFromName(i.name)._2).toIndexedSeq
-        else
-          IndexedSeq[Int]()
+      val keys = sql("select").asInstanceOf[List[SelectItem]].filter(si => si.function == null).map(si => fromTable.getTypeGIDFromName(si.selectCol.name)._2).toIndexedSeq
+      assert(!sql.contains("groupby") ||
+        keys.toSet.equals(
+        sql("groupby").asInstanceOf[List[Identifier]].map(i => fromTable.getTypeGIDFromName(i.name)._2).toSet)
+      )
 
-      println(getTypeGIDFromName)
-      println( sql("select").asInstanceOf[List[SelectItem]])
+
+
 
       val functions = sql("select").asInstanceOf[List[SelectItem]].filter(i => i.function != null).map(i => (getTypeGIDFromName(i.selectCol.name)._2, getFunctionFromName(i.function.name, getTypeGIDFromName(i.selectCol.name)._1))).toMap
       val getNewNameFromOldGID = sql("select").asInstanceOf[List[SelectItem]].filter(i => i.function != null).map(i => (fromTable.getTypeGIDFromName(i.selectCol.name)._2, i.asName.name)).toMap
@@ -183,7 +229,7 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
           },
           (tp._1, tp._2)
           )).toMap
-
+      println(getTypeGIDFromName)
 
     }
     if(sql.contains("join")){
@@ -244,6 +290,7 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
       })
     }
 
+
     val getSelectItemFromGID = sql("select").asInstanceOf[List[SelectItem]].map(si => ({
       if(si.asName != null && getTypeGIDFromName.contains(si.asName.name))
         getTypeGIDFromName(si.asName.name)._2
@@ -252,7 +299,7 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
       else if(getTypeGIDFromName.contains(si.selectCol.name))
         getTypeGIDFromName(si.selectCol.name)._2
       else
-        throw new Exception("cant find name")
+        throw new Exception("cant find name " + si)
     },si)).toMap
 
     tailOperator = new SelectOperator(tailOperator,getSelectItemFromGID.keys.toIndexedSeq,this)
