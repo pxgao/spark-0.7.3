@@ -15,9 +15,13 @@ object NetworkStreamGenerator {
   var m1 = 0
   var m2 = 3000
 
+  var p = 30
+
   def main(args: Array[String]) {
     m1 = args(0).toInt
     m2 = args(1).toInt
+
+    p = args(2).toInt
 
     x = new Server(9999, m1, 1000)
     y = new Server(9998, m1, 1000)
@@ -37,11 +41,11 @@ object NetworkStreamGenerator {
         started = true
         var count = 0
         while(true){
-          if(count%60 == 0){
+          if(count%(p*2) == 0){
             x.mean = m1
             println("x.mean = " + x.mean)
           }
-          if(count%60 == 30){
+          if(count%(p*2) == p){
             x.mean = m2
             println("x.mean = " + x.mean)
           }
