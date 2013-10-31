@@ -27,7 +27,7 @@ object NetworkWordCount {
     }
 
     // Create the context with a 1 second batch size
-    val ssc = new StreamingContext(args(0), "NetworkWordCount", Seconds(args(1).toInt),
+    val ssc = new StreamingContext(args(0), "NetworkWordCount", Seconds(args(2).toInt),
       System.getenv("SPARK_HOME"), Seq(System.getenv("SPARK_EXAMPLES_JAR")))
 
     // Create a NetworkInputDStream on target ip:port and count the
