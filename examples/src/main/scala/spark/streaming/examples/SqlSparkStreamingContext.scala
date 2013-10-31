@@ -78,7 +78,7 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
   var batchCount = 0
   var usedCount = 0
   def processBatch(time:Time, rdds :scala.collection.mutable.Map[String, RDD[String]]){
-    if(args.length > 1 && args(1) == "-o")
+    if(args.length > 2 && args(2) == "-o")
       operatorGraph.innerJoinOperatorSets.foreach(s => s.optimize())
     println("running " + time)
     val starttime = System.nanoTime()
@@ -332,8 +332,11 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
 
   def test(args : Array[String]){
     this.args = args
+    new PrintWriter(new File("results/" + args(1)  + ".txt" ))
     val parsedLines = parser.parseFile("sql.txt")
     parsedLines.foreach(p => executeQuery(p) )
+
+
 
     print(this.operatorGraph.toString())
 
@@ -431,7 +434,7 @@ object SqlHelper{
     })
   }
 
-  private val results = new PrintWriter(new File("results/" + Calendar.getInstance().getTime  + ".txt" ))
+  var results : PrintWriter = null
 
   def write(s : String) = {
     results.write(s)
