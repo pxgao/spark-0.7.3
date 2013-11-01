@@ -511,7 +511,7 @@ abstract class DStream[T: ClassManifest] (
       first11.take(10).foreach(println)
       if (first11.size > 10) println("...")
       println()
-      println("Batch Process Time " + (System.currentTimeMillis() - time.milliseconds) + " " + rdd.first)
+      //println("Batch Process Time " + (System.currentTimeMillis() - time.milliseconds) + " " + rdd.first)
     }
     val newStream = new ForEachDStream(this, context.sparkContext.clean(foreachFunc))
     ssc.registerOutputStream(newStream)
