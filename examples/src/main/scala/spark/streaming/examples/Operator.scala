@@ -479,9 +479,9 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
     )
 
     if(this.parentCtx.args.length > 2 && this.parentCtx.args(2) == "-o"){
-      val joinedSize = joined.countApprox(200).getFinalValue().mean
-      val rdd1Size = rdd1.countApprox(200).getFinalValue().mean
-      val rdd2Size = rdd2.countApprox(200).getFinalValue().mean
+      val joinedSize = joined.countApprox(1,0.5).getFinalValue().mean
+      val rdd1Size = rdd1.countApprox(1,0.5).getFinalValue().mean
+      val rdd2Size = rdd2.countApprox(1,0.5).getFinalValue().mean
       if(rdd1Size > 0 && rdd2Size > 0)
       {
         selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)

@@ -21,7 +21,8 @@ import it.unimi.dsi.fastutil.ints.IntOpenHashSet
  * Based on the following JavaWorld article:
  * http://www.javaworld.com/javaworld/javaqa/2003-12/02-qa-1226-sizeof.html
  */
-private[spark] object SizeEstimator extends Logging {
+//private[spark]
+object SizeEstimator extends Logging {
 
   // Sizes of primitive types
   private val BYTE_SIZE    = 1
