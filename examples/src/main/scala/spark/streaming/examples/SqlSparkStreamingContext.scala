@@ -78,6 +78,7 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
   var batchCount = 0
   var usedCount = 0
   def processBatch(time:Time, rdds : scala.collection.mutable.Map[String, RDD[String]]){
+   val optimizeStart = System.nanoTime()
     if(args.length > 2 && args(2) == "-o")
       operatorGraph.innerJoinOperatorSets.foreach(s => s.optimize())
     println("running " + time)
@@ -90,6 +91,7 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
       usedCount += 1
     }
     batchCount += 1
+    println("optimization time in ms:" + (starttime - optimizeStart)/1000000.0 )
     println("execution time in ms:" + timeUsed + " Avg:" + (timeSum/usedCount))
     SqlHelper.writeln(timeUsed.toString)
     operatorGraph.innerJoinOperators.foreach(println(_))
