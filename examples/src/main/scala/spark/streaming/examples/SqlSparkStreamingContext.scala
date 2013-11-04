@@ -43,6 +43,7 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
       val name = kvp._1
       val stream = kvp._2
       stream.foreach((rdd,time) => {
+
         if (!recentBatchOfInputStreams.contains(time))
           recentBatchOfInputStreams += time -> scala.collection.mutable.Map[String, RDD[String]]()
         recentBatchOfInputStreams(time) += name -> rdd

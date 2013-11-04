@@ -491,25 +491,29 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
 
   val getSelectivityActor = actor{
     while(true){
-      receive{
-        case (rdd1 : RDD[IndexedSeq[Any]], rdd2 : RDD[IndexedSeq[Any]], joined : RDD[IndexedSeq[Any]]) =>
-        {
-          val joinAcc = parentCtx.ssc.sc.accumulator(0)
-          val rdd1Acc = parentCtx.ssc.sc.accumulator(0)
-          val rdd2Acc = parentCtx.ssc.sc.accumulator(0)
-
-          joined.foreach(l => joinAcc += 1)
-          rdd1.foreach(l => rdd1Acc += 1)
-          rdd2.foreach(l => rdd2Acc += 1)
-
-          val joinedSize = joinAcc.value
-          val rdd1Size = rdd1Acc.value
-          val rdd2Size = rdd2Acc.value
-          if(rdd1Size > 0 && rdd2Size > 0)
+      try{
+        receive{
+          case (rdd1 : RDD[_], rdd2 : RDD[_], joined : RDD[_]) =>
           {
-            selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)
+            val joinAcc = parentCtx.ssc.sc.accumulator(0)
+            val rdd1Acc = parentCtx.ssc.sc.accumulator(0)
+            val rdd2Acc = parentCtx.ssc.sc.accumulator(0)
+
+            joined.foreach(l => joinAcc += 1)
+            rdd1.foreach(l => rdd1Acc += 1)
+            rdd2.foreach(l => rdd2Acc += 1)
+
+            val joinedSize = joinAcc.value
+            val rdd1Size = rdd1Acc.value
+            val rdd2Size = rdd2Acc.value
+            if(rdd1Size > 0 && rdd2Size > 0)
+            {
+              selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)
+            }
           }
         }
+      }catch{
+        case e : Exception => e.printStackTrace()
       }
     }
   }
