@@ -481,44 +481,38 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
 
 
     if(this.parentCtx.args.length > 2 && this.parentCtx.args(2) == "-o" && exec.getTime.milliseconds % 3 == 0){
-      val joinAcc = parentCtx.ssc.sc.accumulator(0)
-      val rdd1Acc = parentCtx.ssc.sc.accumulator(0)
-      val rdd2Acc = parentCtx.ssc.sc.accumulator(0)
-
-      joined.foreach(l => joinAcc += 1)
-      rdd1.foreach(l => rdd1Acc += 1)
-      rdd2.foreach(l => rdd2Acc += 1)
-
-      val joinedSize = joinAcc.value
-      val rdd1Size = rdd1Acc.value
-      val rdd2Size = rdd2Acc.value
-      if(rdd1Size > 0 && rdd2Size > 0)
-      {
-        selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)
-      }
+      getSelectivityActor ! (rdd1,rdd2, joined)
     }
 
-//    getSelectivityActor ! (rdd1,rdd2, joined)
+
     result
   }
 
 
-//  val getSelectivityActor = actor{
-//    while(true){
-//      receive{
-//        case (rdd1 : RDD[IndexedSeq[Any]], rdd2 : RDD[IndexedSeq[Any]], joined : RDD[IndexedSeq[Any]]) =>
-//        {
-//          val joinedSize = joined.sample(true, 0.001, 0).count()
-//          val rdd1Size = rdd1.sample(true, 0.001, 0).count()
-//          val rdd2Size = rdd2.sample(true, 0.001, 0).count()
-//          if(rdd1Size > 0 && rdd2Size > 0)
-//          {
-//            selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)
-//          }
-//        }
-//      }
-//    }
-//  }
+  val getSelectivityActor = actor{
+    while(true){
+      receive{
+        case (rdd1 : RDD[IndexedSeq[Any]], rdd2 : RDD[IndexedSeq[Any]], joined : RDD[IndexedSeq[Any]]) =>
+        {
+          val joinAcc = parentCtx.ssc.sc.accumulator(0)
+          val rdd1Acc = parentCtx.ssc.sc.accumulator(0)
+          val rdd2Acc = parentCtx.ssc.sc.accumulator(0)
+
+          joined.foreach(l => joinAcc += 1)
+          rdd1.foreach(l => rdd1Acc += 1)
+          rdd2.foreach(l => rdd2Acc += 1)
+
+          val joinedSize = joinAcc.value
+          val rdd1Size = rdd1Acc.value
+          val rdd2Size = rdd2Acc.value
+          if(rdd1Size > 0 && rdd2Size > 0)
+          {
+            selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)
+          }
+        }
+      }
+    }
+  }
 
   def getJoinCondition = joinCondition
   override def toString = super.toString + joinCondition + " Sel:" + selectivity
