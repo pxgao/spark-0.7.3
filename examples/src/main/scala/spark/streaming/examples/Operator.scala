@@ -480,7 +480,7 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
     )
 
 
-    if(this.parentCtx.args.length > 2 && this.parentCtx.args(2) == "-o" && exec.getTime.milliseconds % 3 == 0){
+    if(this.parentCtx.args.length > 2 && this.parentCtx.args(2) == "-o"){
       getSelectivityActor ! (rdd1,rdd2, joined)
     }
 
