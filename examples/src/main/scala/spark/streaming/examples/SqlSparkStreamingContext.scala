@@ -1,13 +1,14 @@
 package spark.streaming.examples
 
-import spark.streaming.{Time, Seconds, DStream, StreamingContext}
+import spark.streaming._
 import spark.RDD
 import scala.actors.Actor._
 import scala.actors.Actor
-import scala.collection.immutable
 import scala.io._
 import java.io.{File, PrintWriter}
 import java.util.Calendar
+import scala.Tuple2
+
 
 /**
  * Created with IntelliJ IDEA.
@@ -16,8 +17,13 @@ import java.util.Calendar
  * Time: 8:25 PM
  * To change this template use File | Settings | File Templates.
  */
-class SqlSparkStreamingContext(_ssc : StreamingContext) {
-  val ssc = _ssc
+class SqlSparkStreamingContext(master: String,
+                               appName: String,
+                               batchDuration: Duration,
+                               sparkHome: String = null,
+                               jars: Seq[String] = Nil,
+                               environment: Map[String, String] = Map()) {
+  val ssc = new StreamingContext(master, appName, batchDuration,sparkHome, jars, environment)
   val inputStreams = scala.collection.mutable.Map[String, DStream[String]]()
   val recentBatchOfInputStreams = scala.collection.mutable.Map[Time, scala.collection.mutable.Map[String, RDD[String]]]()
   val operatorGraph = new OperatorGraph(this)
@@ -25,6 +31,9 @@ class SqlSparkStreamingContext(_ssc : StreamingContext) {
   val parser = new SqlParser()
   var args :Array[String] = null
 
+  var incrementalOperator = true
+
+  def getBatchDuration = batchDuration
 
   object columns {
     private var globalColumnCount = 0

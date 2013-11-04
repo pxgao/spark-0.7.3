@@ -21,7 +21,7 @@ abstract class Operator {
   var outputSchema : Schema = null
 
   def getChildOperators = childOperators
-  def execute(exec : Execution) : RDD[IndexedSeq[Any]]
+  def execute(exec : Execution) : Map[Time, RDD[IndexedSeq[Any]]]
   def replaceParent(oldParent : Operator, newParent : Operator)
   override def toString = this.getClass.getSimpleName + "@" + this.hashCode() + " "
   def toStringWithIndent(offset : Int) : String = {
@@ -90,7 +90,7 @@ class InnerJoinOperatorSet(parentCtx : SqlSparkStreamingContext) extends Operato
 
 
 
-  override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+  override def execute(exec : Execution) : Map[Time,RDD[IndexedSeq[Any]]] = {
     tailOperator.execute(exec)
   }
 
@@ -143,7 +143,7 @@ class WhereOperatorSet(parentCtx : SqlSparkStreamingContext) extends UnaryOperat
     tailOperator = built(parentOperators.head, operators.clone())
   }
 
-  override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+  override def execute(exec : Execution) : Map[Time,RDD[IndexedSeq[Any]]] = {
     tailOperator.execute(exec)
   }
 
@@ -200,28 +200,34 @@ class WindowOperator(parentOp : Operator, batches : Int, parentCtx : SqlSparkStr
   sqlContext = parentCtx
   sqlContext.operatorGraph.addOperator(this)
   setParent(parentOp)
-  var cached = List[(Time,RDD[IndexedSeq[Any]])]()
-  val cachedTime = mutable.Set[Time]()
+  var cached = Map[Time,RDD[IndexedSeq[Any]]]()
 
   override def setParent(parentOp : Operator){
     super.setParent(parentOp)
     outputSchema = parentOp.outputSchema
   }
 
-  override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
-    if(!cachedTime(exec.getTime)){
-      cached = cached :+ (exec.getTime, parentOperators.head.execute(exec))
-      cachedTime += exec.getTime
+  override def execute(exec : Execution) : Map[Time,RDD[IndexedSeq[Any]]] = {
+    val resultFromParent = parentOperators.head.execute(exec)
+
+    var result = Map[Time,RDD[IndexedSeq[Any]]]()
+
+    for(b <- 0 to batches){
+      val batchTime = exec.getTime - (this.parentCtx.getBatchDuration * b)
+      val rdd =
+        if(resultFromParent.contains(batchTime))
+          resultFromParent(batchTime)
+        else if(cached.contains(batchTime))
+          cached(batchTime)
+        else
+          throw new Exception("Can't find rdd")
+      result += batchTime -> rdd
     }
 
 
-    while(cached.length > batches){
-      val toRm = cached.head._1
-      cachedTime -= toRm
-      cached = cached.tail
-    }
-    val returnRDD = sqlContext.ssc.sparkContext.union(cached.map(_._2))
-    returnRDD
+    cached = result
+    cached.foreach(tp => tp._2.persist())
+    result
   }
 
 }
@@ -243,20 +249,19 @@ class SelectOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
     localColId = selectColGlobalId.map(gid => parentOp.outputSchema.getLocalIdFromGlobalId(gid))
   }
 
-  override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
-
-
-    val rdd = parentOperators.head.execute(exec)
-    val returnRDD =
-      if(isSelectAll)
-        rdd
-      else{
-        val localColId = this.localColId
-        //println("print in select op")
-        //SqlHelper.printRDD(rdd)
-        rdd.map(record => localColId.map(id => record(id)) )
-      }
-    returnRDD
+  override def execute(exec : Execution) : Map[Time, RDD[IndexedSeq[Any]]] = {
+    parentOperators.head.execute(exec).mapValues(rdd => {
+      val returnRDD =
+        if(isSelectAll)
+          rdd
+        else{
+          val localColId = this.localColId
+          //println("print in select op")
+          //SqlHelper.printRDD(rdd)
+          rdd.map(record => localColId.map(id => record(id)) )
+        }
+      returnRDD
+    });
   }
 
   override def toString = super.toString + selectColGlobalId
@@ -277,16 +282,14 @@ class WhereOperator(parentOp : Operator, func : (IndexedSeq[Any], Schema) => Boo
     outputSchema = parentOp.outputSchema
   }
 
-  override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+  override def execute(exec : Execution) : Map[Time,RDD[IndexedSeq[Any]]] = {
     val func = this.func
     val outputSchema = this.outputSchema
-    val rdd = parentOperators.head.execute(exec)
 
-    //    println("print in where op")
-//    SqlHelper.printRDD(rdd)
-    val returnRdd = rdd.filter(record => func(record, outputSchema))
-    selectivity = returnRdd.count().toDouble/rdd.count()
-    returnRdd
+    parentOperators.head.execute(exec).mapValues(rdd => {
+      val returnRdd = rdd.filter(record => func(record, outputSchema))
+      returnRdd
+    })
   }
 
   override def toString = super.toString + whereColumnId + "Sel:" + selectivity
@@ -314,6 +317,9 @@ class GroupByOperator(parentOp : Operator, keyColumnsArr : IndexedSeq[Int], func
   outputSchema = new Schema(keyColumnsArr.map(gid => (parentOp.outputSchema.getClassFromGlobalId(gid),gid))
     ++ functions.map(kvp => (kvp._2.getResultType, getNewGIDFromOldGID(kvp._1))))
 
+  var cached = Map[Time,RDD[IndexedSeq[Any]]]()
+
+
   def getKeyColumnsArr = keyColumnsArr
   def getFunctions = functions
 
@@ -322,8 +328,21 @@ class GroupByOperator(parentOp : Operator, keyColumnsArr : IndexedSeq[Int], func
     assert(keyColumns.union(valueColumns).subsetOf(parentOp.outputSchema.getSchemaArray.map(_._2).toSet))
   }
 
-  override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+  override def execute(exec : Execution) : Map[Time,RDD[IndexedSeq[Any]]] = {
+    val grouped = parentOperators.head.execute(exec).map(tp => {
+      if(this.parentCtx.incrementalOperator && cached.contains(tp._1))
+        cached(tp._1)
+      else
+        groupBy(tp._2)
+    }).toSeq
+    val unioned = this.parentCtx.ssc.sc.union[IndexedSeq[Any]](grouped)
+    val result = Map[Time,RDD[IndexedSeq[Any]]](exec.getTime -> groupBy(unioned))
+    cached = result
+    result
+  }
 
+  //TODO: Try to keep the partition info by avoiding map
+  def groupBy(rdd : RDD[IndexedSeq[Any]]) : RDD[IndexedSeq[Any]] = {
     val createCombiner = (x : IndexedSeq[Any], func : Map[Int, GroupByCombiner]) => {
       func.map(kvp => kvp._2.getCreateCombiner(x(kvp._1))).toIndexedSeq
     }
@@ -340,9 +359,6 @@ class GroupByOperator(parentOp : Operator, keyColumnsArr : IndexedSeq[Int], func
       func.map(kvp => kvp._2.getFinalProcessing(x(kvp._1))).toIndexedSeq
     }
 
-
-
-    val rdd = parentOperators.head.execute(exec)
     val localKeyColumnArr = this.keyColumnsArr.map(parentOp.outputSchema.getLocalIdFromGlobalId(_))
     val localFunctions = this.functions.map(kvp => (parentOp.outputSchema.getLocalIdFromGlobalId(kvp._1), kvp._2) )
     val localValueFunctions = localFunctions.zipWithIndex.map(kvp => (kvp._2,kvp._1._2))//the location in the groupby columns
@@ -421,9 +437,9 @@ class OutputOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
     localColId = selectColGlobalId.map(gid => parentOp.outputSchema.getLocalIdFromGlobalId(gid))
   }
 
-  override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+  override def execute(exec : Execution) : Map[Time,RDD[IndexedSeq[Any]]] = {
+    val rdd = this.parentCtx.ssc.sc.union[IndexedSeq[Any]]( parentOperators.head.execute(exec).map(_._2).toSeq)
 
-    val rdd = parentOperators.head.execute(exec)
     val returnRDD =
       if(isSelectAll)
         rdd
@@ -433,7 +449,7 @@ class OutputOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
         //SqlHelper.printRDD(rdd)
         rdd.map(record => localColId.map(id => record(id)) )
       }
-    returnRDD
+    Map(exec.getTime,returnRDD)
   }
 }
 
@@ -461,14 +477,23 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
 
 
   override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+    val leftParentResult = parentOperators(0).execute(exec)
+    val rightParentResult = parentOperators(1).execute(exec)
+    for(leftTime <- leftParentResult.keys ; rightTime <- rightParentResult.keys){
 
+    }
+
+  }
+
+
+  def join(left : RDD[IndexedSeq[Any]], right : RDD[IndexedSeq[Any]]){
     val localJoinCondition = joinCondition.map(tp => (parentOperators(0).outputSchema.getLocalIdFromGlobalId(tp._1), parentOperators(1).outputSchema.getLocalIdFromGlobalId(tp._2)))
     val getLocalIdFromGlobalId = this.getLocalIdFromGlobalId
     val outputSchema = this.outputSchema
 
 
-    val rdd1 = parentOperators(0).execute(exec).map(record => (localJoinCondition.map(tp => record(tp._1)),record))
-    val rdd2 = parentOperators(1).execute(exec).map(record => (localJoinCondition.map(tp => record(tp._2)),record))
+    val rdd1 = left.map(record => (localJoinCondition.map(tp => record(tp._1)),record))
+    val rdd2 = right.map(record => (localJoinCondition.map(tp => record(tp._2)),record))
 
 
     //use a fully random partitioner, and then map partition
