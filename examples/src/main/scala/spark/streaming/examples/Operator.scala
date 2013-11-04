@@ -485,9 +485,9 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
       val rdd1Acc = parentCtx.ssc.sc.accumulator(0)
       val rdd2Acc = parentCtx.ssc.sc.accumulator(0)
 
-      joined.foreachPartition(iter => joinAcc += iter.length)
-      rdd1.foreachPartition(iter => rdd1Acc += iter.length)
-      rdd2.foreachPartition(iter => rdd2Acc += iter.length)
+      joined.foreach(l => joinAcc += 1)
+      rdd1.foreach(l => rdd1Acc += 1)
+      rdd2.foreach(l => rdd2Acc += 1)
 
       val joinedSize = joinAcc.value
       val rdd1Size = rdd1Acc.value
