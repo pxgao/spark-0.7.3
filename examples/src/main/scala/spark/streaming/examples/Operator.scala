@@ -479,10 +479,12 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
     }
     )
 
+    rdd1.persist(spark.storage.StorageLevel.MEMORY_ONLY)
+    rdd2.persist(spark.storage.StorageLevel.MEMORY_ONLY)
+    joined.persist(spark.storage.StorageLevel.MEMORY_ONLY)
+
     if(this.parentCtx.args.length > 2 && this.parentCtx.args(2) == "-o"){
-      rdd1.persist(spark.storage.StorageLevel.MEMORY_ONLY)
-      rdd2.persist(spark.storage.StorageLevel.MEMORY_ONLY)
-      joined.persist(spark.storage.StorageLevel.MEMORY_ONLY)
+
 
       val joinedSize = joined.sample(true, 0.01, 1).count
       val rdd1Size = rdd1.sample(true, 0.01, 1).count
