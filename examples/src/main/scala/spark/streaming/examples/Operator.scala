@@ -466,6 +466,7 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
     val getLocalIdFromGlobalId = this.getLocalIdFromGlobalId
     val outputSchema = this.outputSchema
 
+
     val rdd1 = parentOperators(0).execute(exec).map(record => (localJoinCondition.map(tp => record(tp._1)),record))
     val rdd2 = parentOperators(1).execute(exec).map(record => (localJoinCondition.map(tp => record(tp._2)),record))
 
@@ -479,6 +480,10 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
     )
 
     if(this.parentCtx.args.length > 2 && this.parentCtx.args(2) == "-o"){
+      rdd1.persist(spark.storage.StorageLevel.MEMORY_ONLY)
+      rdd2.persist(spark.storage.StorageLevel.MEMORY_ONLY)
+      joined.persist(spark.storage.StorageLevel.MEMORY_ONLY)
+
       val joinedSize = joined.countApprox(1,0.5).getFinalValue().mean
       val rdd1Size = rdd1.countApprox(1,0.5).getFinalValue().mean
       val rdd2Size = rdd2.countApprox(1,0.5).getFinalValue().mean
@@ -488,7 +493,7 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
       }
     }
 
-    //getSelectivityActor ! (rdd1,rdd2, joined)
+//    getSelectivityActor ! (rdd1,rdd2, joined)
     result
   }
 

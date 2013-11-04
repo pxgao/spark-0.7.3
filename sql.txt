@@ -4,3 +4,8 @@ z = input e:int,f:int from localhost:9997 delimiter ","
 tw = select x.a as a, x.b as b, y.c as c, y.d as d, z.e as e, z.f as f from x inner join y on x.a = y.c inner join z on x.a = z.e
 gp = select count(b) as sumb from tw
 output sumb from gp delimiter ","
+//x = input a:int, b:int from localhost:9999 delimiter ","
+//l = select a from x
+//r = select b from x
+//j = select l.a as a, r.b as b from l inner join r on l.a = r.b
+//output a,b from j delimiter ","

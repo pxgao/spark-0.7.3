@@ -11,4 +11,6 @@ trait Partition extends Serializable {
   
   // A better default implementation of HashCode
   override def hashCode(): Int = index
+
+
 }
