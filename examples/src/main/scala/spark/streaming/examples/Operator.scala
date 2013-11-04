@@ -480,7 +480,7 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
     )
 
 
-    if(this.parentCtx.args.length > 2 && this.parentCtx.args(2) == "-o"){
+    if(this.parentCtx.args.length > 2 && this.parentCtx.args(2) == "-o" && exec.getTime.milliseconds % 3 == 0){
       val joinAcc = parentCtx.ssc.sc.accumulator(0)
       val rdd1Acc = parentCtx.ssc.sc.accumulator(0)
       val rdd2Acc = parentCtx.ssc.sc.accumulator(0)
