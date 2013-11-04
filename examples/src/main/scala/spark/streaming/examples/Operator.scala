@@ -479,16 +479,19 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
     }
     )
 
-    rdd1.persist(spark.storage.StorageLevel.MEMORY_ONLY)
-    rdd2.persist(spark.storage.StorageLevel.MEMORY_ONLY)
-    joined.persist(spark.storage.StorageLevel.MEMORY_ONLY)
 
     if(this.parentCtx.args.length > 2 && this.parentCtx.args(2) == "-o"){
+      val joinAcc = parentCtx.ssc.sc.accumulator(0)
+      val rdd1Acc = parentCtx.ssc.sc.accumulator(0)
+      val rdd2Acc = parentCtx.ssc.sc.accumulator(0)
 
+      joined.foreach(l => joinAcc += 1)
+      rdd1.foreach(l => rdd1Acc += 1)
+      rdd2.foreach(l => rdd2Acc += 1)
 
-      val joinedSize = joined.sample(true, 0.01, 1).count
-      val rdd1Size = rdd1.sample(true, 0.01, 1).count
-      val rdd2Size = rdd2.sample(true, 0.01, 1).count
+      val joinedSize = joinAcc.value
+      val rdd1Size = rdd1Acc.value
+      val rdd2Size = rdd2Acc.value
       if(rdd1Size > 0 && rdd2Size > 0)
       {
         selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)
