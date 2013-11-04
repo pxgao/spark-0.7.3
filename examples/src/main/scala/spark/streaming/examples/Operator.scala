@@ -484,9 +484,9 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
       rdd2.persist(spark.storage.StorageLevel.MEMORY_ONLY)
       joined.persist(spark.storage.StorageLevel.MEMORY_ONLY)
 
-      val joinedSize = joined.countApprox(1,0.5).getFinalValue().mean
-      val rdd1Size = rdd1.countApprox(1,0.5).getFinalValue().mean
-      val rdd2Size = rdd2.countApprox(1,0.5).getFinalValue().mean
+      val joinedSize = joined.count
+      val rdd1Size = rdd1.count
+      val rdd2Size = rdd2.count
       if(rdd1Size > 0 && rdd2Size > 0)
       {
         selectivity = joinedSize.toDouble /(rdd1Size * rdd2Size)
