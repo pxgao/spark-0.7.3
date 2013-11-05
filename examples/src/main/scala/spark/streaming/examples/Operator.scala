@@ -7,6 +7,7 @@ import spark.SparkContext._
 import scala.collection.mutable.ArrayBuffer
 import scala.actors.Actor._
 import scala.actors.Actor
+import spark.Accumulator
 /**
  * Created with IntelliJ IDEA.
  * User: peter
@@ -21,7 +22,7 @@ abstract class Operator {
   var outputSchema : Schema = null
 
   def getChildOperators = childOperators
-  def execute(exec : Execution) : Map[Time, RDD[IndexedSeq[Any]]]
+  def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]]
   def replaceParent(oldParent : Operator, newParent : Operator)
   override def toString = this.getClass.getSimpleName + "@" + this.hashCode() + " "
   def toStringWithIndent(offset : Int) : String = {
@@ -90,7 +91,7 @@ class InnerJoinOperatorSet(parentCtx : SqlSparkStreamingContext) extends Operato
 
 
 
-  override def execute(exec : Execution) : Map[Time,RDD[IndexedSeq[Any]]] = {
+  override def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]] = {
     tailOperator.execute(exec)
   }
 
@@ -143,7 +144,7 @@ class WhereOperatorSet(parentCtx : SqlSparkStreamingContext) extends UnaryOperat
     tailOperator = built(parentOperators.head, operators.clone())
   }
 
-  override def execute(exec : Execution) : Map[Time,RDD[IndexedSeq[Any]]] = {
+  override def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]] = {
     tailOperator.execute(exec)
   }
 
@@ -200,34 +201,20 @@ class WindowOperator(parentOp : Operator, batches : Int, parentCtx : SqlSparkStr
   sqlContext = parentCtx
   sqlContext.operatorGraph.addOperator(this)
   setParent(parentOp)
-  var cached = Map[Time,RDD[IndexedSeq[Any]]]()
+  var cached = Map[Time,Array[RDD[IndexedSeq[Any]]]]()
 
   override def setParent(parentOp : Operator){
     super.setParent(parentOp)
     outputSchema = parentOp.outputSchema
   }
 
-  override def execute(exec : Execution) : Map[Time,RDD[IndexedSeq[Any]]] = {
+  override def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]] = {
     val resultFromParent = parentOperators.head.execute(exec)
 
-    var result = Map[Time,RDD[IndexedSeq[Any]]]()
-
-    for(b <- 0 to batches){
-      val batchTime = exec.getTime - (this.parentCtx.getBatchDuration * b)
-      val rdd =
-        if(resultFromParent.contains(batchTime))
-          resultFromParent(batchTime)
-        else if(cached.contains(batchTime))
-          cached(batchTime)
-        else
-          throw new Exception("Can't find rdd")
-      result += batchTime -> rdd
-    }
-
-
-    cached = result
-    cached.foreach(tp => tp._2.persist())
-    result
+    cached += exec.getTime -> resultFromParent
+    cached.filter(kvp => kvp._1 <= exec.getTime - this.parentCtx.getBatchDuration * batches)
+    cached.foreach(tp => tp._2.foreach(_.persist()))
+    cached.flatMap(tp => tp._2).toArray
   }
 
 }
@@ -249,8 +236,8 @@ class SelectOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
     localColId = selectColGlobalId.map(gid => parentOp.outputSchema.getLocalIdFromGlobalId(gid))
   }
 
-  override def execute(exec : Execution) : Map[Time, RDD[IndexedSeq[Any]]] = {
-    parentOperators.head.execute(exec).mapValues(rdd => {
+  override def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]] = {
+    parentOperators.head.execute(exec).map(rdd => {
       val returnRDD =
         if(isSelectAll)
           rdd
@@ -282,11 +269,11 @@ class WhereOperator(parentOp : Operator, func : (IndexedSeq[Any], Schema) => Boo
     outputSchema = parentOp.outputSchema
   }
 
-  override def execute(exec : Execution) : Map[Time,RDD[IndexedSeq[Any]]] = {
+  override def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]] = {
     val func = this.func
     val outputSchema = this.outputSchema
 
-    parentOperators.head.execute(exec).mapValues(rdd => {
+    parentOperators.head.execute(exec).map(rdd => {
       val returnRdd = rdd.filter(record => func(record, outputSchema))
       returnRdd
     })
@@ -317,7 +304,7 @@ class GroupByOperator(parentOp : Operator, keyColumnsArr : IndexedSeq[Int], func
   outputSchema = new Schema(keyColumnsArr.map(gid => (parentOp.outputSchema.getClassFromGlobalId(gid),gid))
     ++ functions.map(kvp => (kvp._2.getResultType, getNewGIDFromOldGID(kvp._1))))
 
-  var cached = Map[Time,RDD[IndexedSeq[Any]]]()
+  var cached = Map[RDD[IndexedSeq[Any]],RDD[IndexedSeq[Any]]]()
 
 
   def getKeyColumnsArr = keyColumnsArr
@@ -328,16 +315,16 @@ class GroupByOperator(parentOp : Operator, keyColumnsArr : IndexedSeq[Int], func
     assert(keyColumns.union(valueColumns).subsetOf(parentOp.outputSchema.getSchemaArray.map(_._2).toSet))
   }
 
-  override def execute(exec : Execution) : Map[Time,RDD[IndexedSeq[Any]]] = {
-    val grouped = parentOperators.head.execute(exec).map(tp => {
-      if(this.parentCtx.incrementalOperator && cached.contains(tp._1))
-        cached(tp._1)
+  override def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]] = {
+    val rddPair = parentOperators.head.execute(exec).map(rdd => (rdd, {
+      if(this.parentCtx.incrementalOperator && cached.contains(rdd))
+        cached(rdd)
       else
-        groupBy(tp._2)
-    }).toSeq
-    val unioned = this.parentCtx.ssc.sc.union[IndexedSeq[Any]](grouped)
-    val result = Map[Time,RDD[IndexedSeq[Any]]](exec.getTime -> groupBy(unioned))
-    cached = result
+        groupBy(rdd)
+    })).toMap
+    val unioned = this.parentCtx.ssc.sc.union[IndexedSeq[Any]](rddPair.values.toSeq)
+    val result = Array[RDD[IndexedSeq[Any]]](groupBy(unioned))
+    cached = rddPair
     result
   }
 
@@ -362,7 +349,13 @@ class GroupByOperator(parentOp : Operator, keyColumnsArr : IndexedSeq[Int], func
     val localKeyColumnArr = this.keyColumnsArr.map(parentOp.outputSchema.getLocalIdFromGlobalId(_))
     val localFunctions = this.functions.map(kvp => (parentOp.outputSchema.getLocalIdFromGlobalId(kvp._1), kvp._2) )
     val localValueFunctions = localFunctions.zipWithIndex.map(kvp => (kvp._2,kvp._1._2))//the location in the groupby columns
-    val kvpRdd = rdd.map(record => (localKeyColumnArr.map(record(_)).toIndexedSeq, localFunctions.map(kvp => record(kvp._1)).toIndexedSeq))
+    SqlHelper.printRDD(rdd)
+    print(localKeyColumnArr)
+    print(localFunctions)
+    val kvpRdd = rdd.map(record => (
+      localKeyColumnArr.map(record(_)).toIndexedSeq,
+      localFunctions.map(kvp => record(kvp._1)).toIndexedSeq)
+    )
     val combined = kvpRdd.combineByKey[IndexedSeq[Any]](
       (x : IndexedSeq[Any]) => createCombiner(x,localValueFunctions),
       (x : IndexedSeq[Any],y : IndexedSeq[Any])=>mergeValue(x,y,localValueFunctions),
@@ -384,7 +377,7 @@ class ParseOperator(schema : Schema, delimiter : String, inputStreamName : Strin
   sqlContext.operatorGraph.addOperator(this)
   outputSchema = schema
 
-  override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+  override def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]] = {
 
     val outputSchema = this.outputSchema
     val delimiter = this.delimiter
@@ -413,7 +406,7 @@ class ParseOperator(schema : Schema, delimiter : String, inputStreamName : Strin
 
     val rdd = exec.getInputRdds(inputStreamName)
     val returnRDD = rdd.map(line => parseLine(line)).filter(line => line.length > 0)
-    returnRDD
+    Array(returnRDD)
   }
 
   override def setParent(parentOp : Operator){}
@@ -437,8 +430,8 @@ class OutputOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
     localColId = selectColGlobalId.map(gid => parentOp.outputSchema.getLocalIdFromGlobalId(gid))
   }
 
-  override def execute(exec : Execution) : Map[Time,RDD[IndexedSeq[Any]]] = {
-    val rdd = this.parentCtx.ssc.sc.union[IndexedSeq[Any]]( parentOperators.head.execute(exec).map(_._2).toSeq)
+  override def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]] = {
+    val rdd = this.parentCtx.ssc.sc.union[IndexedSeq[Any]]( parentOperators.head.execute(exec).toSeq)
 
     val returnRDD =
       if(isSelectAll)
@@ -449,7 +442,7 @@ class OutputOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
         //SqlHelper.printRDD(rdd)
         rdd.map(record => localColId.map(id => record(id)) )
       }
-    Map(exec.getTime,returnRDD)
+    Array(returnRDD)
   }
 }
 
@@ -462,6 +455,7 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
   val leftJoinSet = joinCondition.map(tp=>tp._1).toSet
   val rightJoinSet = joinCondition.map(tp=>tp._2).toSet
 
+  var cached = Map[(RDD[IndexedSeq[Any]], RDD[IndexedSeq[Any]]), RDD[IndexedSeq[Any]]]()
 
   var selectivity : Double = 1.0
 
@@ -476,17 +470,25 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
   }
 
 
-  override def execute(exec : Execution) : RDD[IndexedSeq[Any]] = {
+  override def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]] = {
     val leftParentResult = parentOperators(0).execute(exec)
     val rightParentResult = parentOperators(1).execute(exec)
-    for(leftTime <- leftParentResult.keys ; rightTime <- rightParentResult.keys){
-
+    var result = Map[(RDD[IndexedSeq[Any]], RDD[IndexedSeq[Any]]), RDD[IndexedSeq[Any]]]()
+    for(leftRdd <- leftParentResult ; rightRdd <- rightParentResult){
+      val res :  RDD[IndexedSeq[Any]] =
+        if(cached.contains((leftRdd, rightRdd)))
+          cached((leftRdd, rightRdd))
+        else
+          join(leftRdd, rightRdd)
+      result += (leftRdd, rightRdd) -> res
     }
-
+    result.foreach(tp => tp._2.persist())
+    cached = result
+    result.values.toArray
   }
 
 
-  def join(left : RDD[IndexedSeq[Any]], right : RDD[IndexedSeq[Any]]){
+  def join(left : RDD[IndexedSeq[Any]], right : RDD[IndexedSeq[Any]]) = {
     val localJoinCondition = joinCondition.map(tp => (parentOperators(0).outputSchema.getLocalIdFromGlobalId(tp._1), parentOperators(1).outputSchema.getLocalIdFromGlobalId(tp._2)))
     val getLocalIdFromGlobalId = this.getLocalIdFromGlobalId
     val outputSchema = this.outputSchema
@@ -506,7 +508,15 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
 
 
     if(this.parentCtx.args.length > 2 && this.parentCtx.args(2) == "-o"){
-      getSelectivityActor ! (rdd1,rdd2, joined)
+      val joinAcc = parentCtx.ssc.sc.accumulator(0L)
+      val rdd1Acc = parentCtx.ssc.sc.accumulator(0L)
+      val rdd2Acc = parentCtx.ssc.sc.accumulator(0L)
+
+      joined.foreach(l => joinAcc += 1)
+      rdd1.foreach(l => rdd1Acc += 1)
+      rdd2.foreach(l => rdd2Acc += 1)
+
+      getSelectivityActor ! (rdd1Acc,rdd2Acc, joinAcc)
     }
 
 
@@ -518,16 +528,8 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
     while(true){
       try{
         receive{
-          case (rdd1 : RDD[_], rdd2 : RDD[_], joined : RDD[_]) =>
+          case (rdd1Acc : Accumulator[Long], rdd2Acc :Accumulator[Long], joinAcc : Accumulator[Long]) =>
           {
-            val joinAcc = parentCtx.ssc.sc.accumulator(0)
-            val rdd1Acc = parentCtx.ssc.sc.accumulator(0)
-            val rdd2Acc = parentCtx.ssc.sc.accumulator(0)
-
-            joined.foreach(l => joinAcc += 1)
-            rdd1.foreach(l => rdd1Acc += 1)
-            rdd2.foreach(l => rdd2Acc += 1)
-
             val joinedSize = joinAcc.value
             val rdd1Size = rdd1Acc.value
             val rdd2Size = rdd2Acc.value
