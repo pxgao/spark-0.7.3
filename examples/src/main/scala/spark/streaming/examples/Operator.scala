@@ -325,6 +325,7 @@ class GroupByOperator(parentOp : Operator, keyColumnsArr : IndexedSeq[Int], func
     val unioned = this.parentCtx.ssc.sc.union[(IndexedSeq[Any],IndexedSeq[Any])](rddPair.values.toSeq)
     val result = Array[RDD[IndexedSeq[Any]]](mergeBatch(unioned))
     cached = rddPair
+    cached.foreach(kvp => kvp._2.persist)
     result
   }
 
