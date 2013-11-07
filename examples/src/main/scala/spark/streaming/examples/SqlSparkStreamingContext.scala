@@ -89,7 +89,7 @@ class SqlSparkStreamingContext(master: String,
   var usedCount = 0
   def processBatch(time:Time, rdds : scala.collection.mutable.Map[String, RDD[String]]){
    val optimizeStart = System.nanoTime()
-    if(args.length > 2 && args(2) == "-o")
+    if(args.contains("-reorder"))
       operatorGraph.innerJoinOperatorSets.foreach(s => s.optimize())
     println("running " + time)
     val starttime = System.nanoTime()

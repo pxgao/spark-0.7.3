@@ -5,5 +5,5 @@ tw = select x.a as a, x.b as b, y.c as c, y.d as d, z.e as e, z.f as f from x in
 gp = select count(b) as sumb from tw
 output sumb from gp delimiter ","
 //x = input a:int, b:int from localhost:9999 delimiter ","
-//g = select a, sum(b) as cb from x group by a
+//g = select a, count(b) as cb from x group by a
 //output a,cb from g delimiter ","
