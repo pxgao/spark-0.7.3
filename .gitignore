@@ -38,3 +38,4 @@ dependency-reduced-pom.xml
 .ensime_lucene
 checkpoint
 results/
+sql.txt
