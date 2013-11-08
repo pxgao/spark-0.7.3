@@ -17,11 +17,16 @@ object NetworkStreamGenerator {
 
   var p = 30
 
+  var rpms = 1
+
   def main(args: Array[String]) {
     m1 = args(0).toInt
     m2 = args(1).toInt
 
     p = args(2).toInt
+
+    rpms = args(3).toInt
+
 
     x = new Server(9999, m1, 100)
     y = new Server(9998, m1, 100)
@@ -98,7 +103,7 @@ class Server(port : Int, _mean:Double = 0.0, _sd : Double = 100.0) extends Threa
          out.write(x)
           count += 1
          //print(new String(x))
-         if(count%5 == 0)
+         if(count%NetworkStreamGenerator.rpms == 0)
           Thread.sleep(1)
         }
 

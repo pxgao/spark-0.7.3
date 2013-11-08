@@ -210,9 +210,8 @@ class WindowOperator(parentOp : Operator, batches : Int, parentCtx : SqlSparkStr
 
   override def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]] = {
     val resultFromParent = parentOperators.head.execute(exec)
-
     cached += exec.getTime -> resultFromParent
-    cached.filter(kvp => kvp._1 <= exec.getTime - this.parentCtx.getBatchDuration * batches)
+    cached = cached.filter(kvp => kvp._1 > exec.getTime - this.parentCtx.getBatchDuration * batches)
     cached.foreach(tp => tp._2.foreach(_.persist()))
     cached.flatMap(tp => tp._2).toArray
   }
@@ -228,6 +227,8 @@ class SelectOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
   setParent(parentOp)
   outputSchema = new Schema(selectColGlobalId.map(gid => (parentOperators.head.outputSchema.getClassFromGlobalId(gid),gid)))
 
+  var cached = Map[RDD[IndexedSeq[Any]], RDD[IndexedSeq[Any]]]()
+
   def getSelectColGlobalId = selectColGlobalId
 
   override def setParent(parentOp : Operator){
@@ -237,8 +238,10 @@ class SelectOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
   }
 
   override def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]] = {
-    parentOperators.head.execute(exec).map(rdd => {
-      val returnRDD =
+    cached = parentOperators.head.execute(exec).map(rdd => (rdd,{
+      if(cached.contains(rdd))
+        cached(rdd)
+      else
         if(isSelectAll)
           rdd
         else{
@@ -247,8 +250,8 @@ class SelectOperator(parentOp : Operator, selectColGlobalId : IndexedSeq[Int], p
           //SqlHelper.printRDD(rdd)
           rdd.map(record => localColId.map(id => record(id)) )
         }
-      returnRDD
-    });
+    })).toMap;
+    cached.values.toArray
   }
 
   override def toString = super.toString + selectColGlobalId
@@ -259,6 +262,8 @@ class WhereOperator(parentOp : Operator, func : (IndexedSeq[Any], Schema) => Boo
   sqlContext.operatorGraph.addOperator(this)
   setParent(parentOp)
 
+
+  var cached = Map[RDD[IndexedSeq[Any]], RDD[IndexedSeq[Any]]]()
 
   var selectivity = 1.0
 
@@ -273,10 +278,13 @@ class WhereOperator(parentOp : Operator, func : (IndexedSeq[Any], Schema) => Boo
     val func = this.func
     val outputSchema = this.outputSchema
 
-    parentOperators.head.execute(exec).map(rdd => {
-      val returnRdd = rdd.filter(record => func(record, outputSchema))
-      returnRdd
-    })
+    cached = parentOperators.head.execute(exec).map(rdd => (rdd, {
+      if(cached.contains(rdd))
+        cached(rdd)
+      else
+        rdd.filter(record => func(record, outputSchema))
+    })).toMap
+    cached.values.toArray
   }
 
   override def toString = super.toString + whereColumnId + "Sel:" + selectivity
@@ -317,8 +325,9 @@ class GroupByOperator(parentOp : Operator, keyColumnsArr : IndexedSeq[Int], func
 
   override def execute(exec : Execution) : Array[RDD[IndexedSeq[Any]]] = {
     val rddPair = parentOperators.head.execute(exec).map(rdd => (rdd, {
-      if(this.parentCtx.args.contains("-incre") && this.parentCtx.incrementalOperator && cached.contains(rdd))
+      if(this.parentCtx.args.contains("-incre") && this.parentCtx.incrementalOperator && cached.contains(rdd)){
         cached(rdd)
+      }
       else
         groupBy(rdd)
     })).toMap
@@ -481,7 +490,6 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
     val left = parentOp1.outputSchema.getLocalIdFromGlobalId
     val right = parentOp2.outputSchema.getLocalIdFromGlobalId.map(kvp => (kvp._1, kvp._2 + left.size))
     getLocalIdFromGlobalId = left ++ right
-
   }
 
 
@@ -491,8 +499,9 @@ class InnerJoinOperator(parentOp1 : Operator, parentOp2 : Operator, joinConditio
     var result = Map[(RDD[IndexedSeq[Any]], RDD[IndexedSeq[Any]]), RDD[IndexedSeq[Any]]]()
     for(leftRdd <- leftParentResult ; rightRdd <- rightParentResult){
       val res :  RDD[IndexedSeq[Any]] =
-        if(this.parentCtx.args.contains("-incre") && cached.contains((leftRdd, rightRdd)))
+        if(this.parentCtx.args.contains("-incre") && cached.contains((leftRdd, rightRdd))){
           cached((leftRdd, rightRdd))
+        }
         else
           join(leftRdd, rightRdd)
       result += (leftRdd, rightRdd) -> res
